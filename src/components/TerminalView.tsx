@@ -5,9 +5,23 @@ import 'xterm/css/xterm.css';
 
 interface TerminalViewProps {
   hostId: string;
+  onConnected?: () => void;
+  onError?: (message: string) => void;
+  onClosed?: () => void;
 }
 
-export function TerminalView({ hostId }: TerminalViewProps) {
+type SshSocketMessage = {
+  type: 'connected' | 'closed' | 'error' | 'data';
+  message?: string;
+  data?: string;
+};
+
+function sshSocketUrl(hostId: string) {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/api/ssh?hostId=${encodeURIComponent(hostId)}`;
+}
+
+export function TerminalView({ hostId, onConnected, onError, onClosed }: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
@@ -39,11 +53,42 @@ export function TerminalView({ hostId }: TerminalViewProps) {
     
     term.current.open(terminalRef.current);
     fitAddon.current.fit();
+    let socket: WebSocket | null = null;
+    let socketFailed = false;
+
+    if (!window.ipcRenderer) {
+      socket = new WebSocket(sshSocketUrl(hostId));
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as SshSocketMessage;
+          if (message.type === 'connected') onConnected?.();
+          if (message.type === 'closed') onClosed?.();
+          if (message.type === 'error') {
+            socketFailed = true;
+            onError?.(message.message || 'SSH connection failed');
+          }
+          if (message.type === 'data' && message.data) term.current?.write(message.data);
+        } catch {
+          socketFailed = true;
+          onError?.('SSH relay sent an invalid response');
+        }
+      };
+      socket.onerror = () => {
+        socketFailed = true;
+        onError?.('SSH relay connection failed');
+      };
+      socket.onclose = () => {
+        if (!socketFailed) onClosed?.();
+      };
+    }
 
     // Listen to input from the user (typing)
     term.current.onData((data) => {
       if (window.ipcRenderer) {
         window.ipcRenderer.send('ssh-input', { id: hostId, data });
+      }
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'input', data }));
       }
     });
 
@@ -56,6 +101,14 @@ export function TerminalView({ hostId }: TerminalViewProps) {
           cols: term.current.cols, 
           rows: term.current.rows 
         });
+      }
+      if (fitAddon.current && term.current && socket?.readyState === WebSocket.OPEN) {
+        fitAddon.current.fit();
+        socket.send(JSON.stringify({
+          type: 'resize',
+          cols: term.current.cols,
+          rows: term.current.rows,
+        }));
       }
     };
     window.addEventListener('resize', handleResize);
@@ -77,6 +130,7 @@ export function TerminalView({ hostId }: TerminalViewProps) {
         window.ipcRenderer.send('ssh-disconnect', { id: hostId });
         window.ipcRenderer.removeAllListeners('ssh-data');
       }
+      socket?.close();
       term.current?.dispose();
     };
   }, [hostId]);

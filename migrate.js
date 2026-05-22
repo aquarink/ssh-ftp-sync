@@ -1,98 +1,64 @@
-const readline = require('readline');
-const postgres = require('postgres');
+const fs = require('fs');
+const path = require('path');
+const mysql = require('mysql2/promise');
+const { loadEnv } = require('./server/env');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
+loadEnv();
 
-console.log('--------------------------------------------------');
-console.log('Supabase Database Migration Tool');
-console.log('--------------------------------------------------');
-console.log('To run this migration, we need your IPv4 Connection Pooler URI.');
-console.log('You can find it in your Supabase Dashboard under:');
-console.log('👉 Project Settings (gear icon) -> Database -> Connection Pooler');
-console.log('Mode: Session (Port 5432 or 6543)');
-console.log('--------------------------------------------------\n');
+async function migrate() {
+  const migrationsPath = path.join(__dirname, 'db', 'migrations');
+  const required = ['MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD'];
 
-rl.question('🔑 Paste your Connection Pooler URI (e.g. postgres://postgres.iuccdegvxugrnmgwzwtj:eg4qLJDooJD8J036@...): ', async (connectionString) => {
-  rl.close();
-  
-  if (!connectionString || !connectionString.trim()) {
-    console.error('❌ Connection string cannot be empty.');
-    process.exit(1);
+  for (const key of required) {
+    if (!process.env[key]) throw new Error(`${key} is required`);
   }
 
-  // Replace password placeholder if user forgot to replace it
-  let finalUri = connectionString.trim();
-  if (finalUri.includes('[YOUR-PASSWORD]')) {
-    finalUri = finalUri.replace('[YOUR-PASSWORD]', 'eg4qLJDooJD8J036');
-    console.log('Replacing [YOUR-PASSWORD] placeholder with your database password...');
-  } else if (finalUri.includes('YOUR-PASSWORD')) {
-    finalUri = finalUri.replace('YOUR-PASSWORD', 'eg4qLJDooJD8J036');
-    console.log('Replacing YOUR-PASSWORD placeholder with your database password...');
-  }
+  const connection = await mysql.createConnection({
+    host: process.env.MYSQL_HOST || 'localhost',
+    port: Number(process.env.MYSQL_PORT || 3306),
+    database: process.env.MYSQL_DATABASE,
+    user: process.env.MYSQL_USER,
+    password: process.env.MYSQL_PASSWORD,
+    multipleStatements: true,
+  });
 
-  const sql = postgres(finalUri);
-
-  console.log('\n🔄 Connecting to Supabase PostgreSQL database...');
   try {
-    console.log('⚠️ Dropping old hosts and users tables if they exist...');
-    await sql`drop table if exists hosts;`;
-    await sql`drop table if exists users;`;
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        name VARCHAR(255) PRIMARY KEY,
+        applied_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+      )
+    `);
 
-    console.log('📦 Creating hosts table with native auth.users foreign key...');
-    await sql`
-      create table hosts (
-        id uuid default gen_random_uuid() primary key,
-        user_id uuid references auth.users(id) on delete cascade not null,
-        name text not null,
-        host text not null,
-        port integer not null default 22,
-        username text not null,
-        password text,
-        created_at timestamp with time zone default timezone('utc'::text, now()) not null
-      );
-    `;
+    const [applied] = await connection.query('SELECT name FROM schema_migrations');
+    const appliedNames = new Set(applied.map((migration) => migration.name));
+    const migrations = fs.readdirSync(migrationsPath)
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
 
-    console.log('🔒 Enabling Row Level Security (RLS) on hosts table...');
-    await sql`alter table hosts enable row level security;`;
+    for (const migration of migrations) {
+      if (appliedNames.has(migration)) continue;
 
-    console.log('🛡️ Creating RLS Policy: Users can view their own hosts...');
-    await sql`
-      create policy "Users can view their own hosts"
-        on hosts for select
-        using (auth.uid() = user_id);
-    `;
+      const sql = fs.readFileSync(path.join(migrationsPath, migration), 'utf8');
+      await connection.beginTransaction();
+      try {
+        await connection.query(sql);
+        await connection.query('INSERT INTO schema_migrations (name) VALUES (?)', [migration]);
+        await connection.commit();
+        console.log(`Applied ${migration}.`);
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      }
+    }
 
-    console.log('🛡️ Creating RLS Policy: Users can insert their own hosts...');
-    await sql`
-      create policy "Users can insert their own hosts"
-        on hosts for insert
-        with check (auth.uid() = user_id);
-    `;
-
-    console.log('🛡️ Creating RLS Policy: Users can update their own hosts...');
-    await sql`
-      create policy "Users can update their own hosts"
-        on hosts for update
-        using (auth.uid() = user_id);
-    `;
-
-    console.log('🛡️ Creating RLS Policy: Users can delete their own hosts...');
-    await sql`
-      create policy "Users can delete their own hosts"
-        on hosts for delete
-        using (auth.uid() = user_id);
-    `;
-
-    console.log('🔔 Reloading PostgREST schema cache...');
-    await sql`NOTIFY pgrst, 'reload schema';`;
-
-    console.log('\n🚀 Migration completed successfully! Your tables are ready and secure.');
-  } catch (err) {
-    console.error('\n❌ Migration failed:', err);
+    console.log(`MySQL migrations are current for ${process.env.MYSQL_DATABASE}.`);
   } finally {
-    await sql.end();
+    await connection.end();
   }
+}
+
+migrate().catch((error) => {
+  console.error('MySQL migration failed:', error.message);
+  process.exitCode = 1;
 });

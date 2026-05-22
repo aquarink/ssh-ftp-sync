@@ -1,19 +1,12 @@
-import { useState, useEffect } from 'react';
-import { Terminal, FolderGit2, Settings, Plus, Server, X, Play, Loader2, LogOut, User, Trash2 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Terminal, FolderGit2, Settings, Plus, Server, X, Play, Loader2, LogOut, User, Trash2, Check, ShieldCheck } from 'lucide-react';
 import { TerminalView } from './components/TerminalView';
-import { supabase } from './lib/supabase';
-import { Session } from '@supabase/supabase-js';
-
-interface Host {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  password?: string;
-}
+import { api, Host, ManagedUser, Session } from './lib/api';
 
 function App() {
+  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
+  const turnstileRef = useRef<HTMLDivElement>(null);
+  const turnstileWidgetId = useRef('');
   const [session, setSession] = useState<Session | null>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [activeHost, setActiveHost] = useState<Host | null>(null);
@@ -28,7 +21,18 @@ function App() {
   const [authConfirmPassword, setAuthConfirmPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
+  const [turnstileToken, setTurnstileToken] = useState('');
   const [loadingHosts, setLoadingHosts] = useState(false);
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [isUsersOpen, setIsUsersOpen] = useState(false);
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [accountError, setAccountError] = useState('');
+  const [accountNotice, setAccountNotice] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [nextPassword, setNextPassword] = useState('');
+  const [confirmNextPassword, setConfirmNextPassword] = useState('');
 
   // Form states
   const [fName, setFName] = useState('');
@@ -38,32 +42,49 @@ function App() {
   const [fPass, setFPass] = useState('');
 
   useEffect(() => {
-    // Check active session on mount
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    });
-
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    api.getSession()
+      .then(({ user }) => setSession(user ? { user } : null))
+      .catch((err) => {
+        console.error('Error fetching session:', err.message);
+        setSession(null);
+      });
   }, []);
 
+  useEffect(() => {
+    if (!turnstileSiteKey || session) return;
+
+    const renderTurnstile = window.setInterval(() => {
+      if (!turnstileRef.current || !window.turnstile || turnstileWidgetId.current) return;
+      turnstileWidgetId.current = window.turnstile.render(turnstileRef.current, {
+        sitekey: turnstileSiteKey,
+        theme: 'dark',
+        callback: (token) => setTurnstileToken(token),
+        'expired-callback': () => setTurnstileToken(''),
+        'error-callback': () => setTurnstileToken(''),
+      });
+      window.clearInterval(renderTurnstile);
+    }, 100);
+
+    return () => {
+      window.clearInterval(renderTurnstile);
+      if (turnstileWidgetId.current) {
+        window.turnstile?.remove?.(turnstileWidgetId.current);
+        turnstileWidgetId.current = '';
+      }
+    };
+  }, [session, turnstileSiteKey]);
+
+  const resetTurnstile = () => {
+    setTurnstileToken('');
+    if (turnstileWidgetId.current) window.turnstile?.reset(turnstileWidgetId.current);
+  };
+
   const fetchHosts = async () => {
-    if (!supabase || !session) return;
+    if (!session) return;
     setLoadingHosts(true);
     try {
-      const { data, error } = await supabase
-        .from('hosts')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: true });
-      if (error) throw error;
-      setHosts(data || []);
+      const { hosts } = await api.listHosts();
+      setHosts(hosts);
     } catch (err: any) {
       console.error('Error fetching hosts:', err.message);
     } finally {
@@ -117,19 +138,16 @@ function App() {
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+    setAuthNotice('');
     setAuthLoading(true);
 
     try {
       const emailLower = authEmail.trim().toLowerCase();
 
       if (authMode === 'login') {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: emailLower,
-          password: authPassword,
-        });
+        const { user } = await api.login(emailLower, authPassword, turnstileToken);
+        setSession({ user });
 
-        if (error) throw error;
-        
         // Reset form
         setAuthEmail('');
         setAuthPassword('');
@@ -139,14 +157,9 @@ function App() {
           throw new Error("Passwords do not match");
         }
 
-        const { error } = await supabase.auth.signUp({
-          email: emailLower,
-          password: authPassword,
-        });
-
-        if (error) throw error;
-
-        alert("Registration successful! Please check your email for confirmation.");
+        const { message } = await api.register(emailLower, authPassword, turnstileToken);
+        setAuthMode('login');
+        setAuthNotice(message);
         setAuthEmail('');
         setAuthPassword('');
         setAuthConfirmPassword('');
@@ -154,6 +167,7 @@ function App() {
     } catch (err: any) {
       setAuthError(err.message);
     } finally {
+      resetTurnstile();
       setAuthLoading(false);
     }
   };
@@ -162,7 +176,8 @@ function App() {
     if (activeHost && window.ipcRenderer) {
       window.ipcRenderer.send('ssh-disconnect', { id: activeHost.id });
     }
-    await supabase.auth.signOut();
+    await api.logout();
+    setSession(null);
   };
 
   const handleAddHost = async (e: React.FormEvent) => {
@@ -170,7 +185,6 @@ function App() {
     if (!session) return;
 
     const newHostData = {
-      user_id: session.user.id,
       name: fName || fHost,
       host: fHost,
       port: parseInt(fPort) || 22,
@@ -179,18 +193,8 @@ function App() {
     };
 
     try {
-      const { data, error } = await supabase
-        .from('hosts')
-        .insert([newHostData])
-        .select();
-
-      if (error) throw error;
-
-      if (data && data[0]) {
-        setHosts([...hosts, data[0]]);
-      } else {
-        fetchHosts();
-      }
+      const { host } = await api.createHost(newHostData);
+      setHosts([...hosts, host]);
 
       setIsAddingHost(false);
       // reset form
@@ -203,13 +207,7 @@ function App() {
   const handleDeleteHost = async (hostId: string) => {
     if (!session) return;
     try {
-      const { error } = await supabase
-        .from('hosts')
-        .delete()
-        .eq('id', hostId)
-        .eq('user_id', session.user.id);
-
-      if (error) throw error;
+      await api.deleteHost(hostId);
 
       setHosts(hosts.filter(h => h.id !== hostId));
       if (activeHost?.id === hostId) {
@@ -221,6 +219,53 @@ function App() {
       }
     } catch (err: any) {
       alert('Error deleting host: ' + err.message);
+    }
+  };
+
+  const fetchUsers = async () => {
+    setUsersLoading(true);
+    try {
+      const { users } = await api.listUsers();
+      setManagedUsers(users);
+    } catch (err: any) {
+      alert('Error loading users: ' + err.message);
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
+  const openUsers = () => {
+    setIsAccountOpen(false);
+    setIsUsersOpen(true);
+    fetchUsers();
+  };
+
+  const reviewUser = async (userId: string, approvalStatus: 'approved' | 'rejected') => {
+    try {
+      const { user } = await api.reviewUser(userId, approvalStatus);
+      setManagedUsers(managedUsers.map(item => item.id === user.id ? user : item));
+    } catch (err: any) {
+      alert('Error reviewing user: ' + err.message);
+    }
+  };
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccountError('');
+    setAccountNotice('');
+    if (nextPassword !== confirmNextPassword) {
+      setAccountError('New passwords do not match');
+      return;
+    }
+
+    try {
+      await api.changePassword(currentPassword, nextPassword);
+      setCurrentPassword('');
+      setNextPassword('');
+      setConfirmNextPassword('');
+      setAccountNotice('Password updated.');
+    } catch (err: any) {
+      setAccountError(err.message);
     }
   };
 
@@ -264,15 +309,23 @@ function App() {
             </div>
           )}
 
+          {authNotice && (
+            <div className="mb-4 p-3 bg-green-500/10 text-green-300 border border-green-500/20 rounded-lg text-xs leading-relaxed">
+              {authNotice}
+            </div>
+          )}
+
           <form onSubmit={handleAuthSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-textMuted mb-1.5">Email Address</label>
+              <label className="block text-xs font-medium text-textMuted mb-1.5">
+                {authMode === 'login' ? 'Email or Username' : 'Email Address'}
+              </label>
               <input
                 value={authEmail}
                 onChange={e => setAuthEmail(e.target.value)}
                 required
-                type="email"
-                placeholder="you@example.com"
+                type={authMode === 'login' ? 'text' : 'email'}
+                placeholder={authMode === 'login' ? 'you@example.com or username' : 'you@example.com'}
                 className="w-full bg-background/50 border border-border rounded-lg px-3 py-2 text-sm text-white placeholder-textMuted/50 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all duration-200"
               />
             </div>
@@ -303,9 +356,20 @@ function App() {
               </div>
             )}
 
+            {turnstileSiteKey ? (
+              <div
+                ref={turnstileRef}
+                className="min-h-[65px]"
+              />
+            ) : (
+              <div className="p-3 bg-yellow-500/10 text-yellow-200 border border-yellow-500/20 rounded-lg text-xs">
+                Human verification is not configured.
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={authLoading}
+              disabled={authLoading || !turnstileToken}
               className="w-full mt-2 py-2.5 bg-primary text-background font-semibold rounded-lg hover:bg-primary/95 transition-all duration-200 text-sm flex items-center justify-center space-x-2 disabled:opacity-50 cursor-pointer"
             >
               {authLoading ? (
@@ -327,8 +391,10 @@ function App() {
               onClick={() => {
                 setAuthMode(authMode === 'login' ? 'register' : 'login');
                 setAuthError('');
+                setAuthNotice('');
                 setAuthPassword('');
                 setAuthConfirmPassword('');
+                resetTurnstile();
               }}
               className="text-primary hover:underline font-medium cursor-pointer"
             >
@@ -350,8 +416,17 @@ function App() {
         <div className="p-2 text-textMuted hover:text-textMain cursor-pointer transition">
           <FolderGit2 size={24} />
         </div>
+        {session.user.role === 'admin' && (
+          <button
+            onClick={openUsers}
+            className="p-2 text-textMuted hover:text-textMain cursor-pointer transition"
+            title="User Approval"
+          >
+            <ShieldCheck size={24} />
+          </button>
+        )}
         <div className="flex-1"></div>
-        <div className="p-2 text-textMuted hover:text-textMain cursor-pointer transition">
+        <div onClick={() => setIsAccountOpen(true)} className="p-2 text-textMuted hover:text-textMain cursor-pointer transition" title="Account Settings">
           <Settings size={24} />
         </div>
         {/* User profile & Sign out */}
@@ -458,7 +533,18 @@ function App() {
                 </div>
               )}
 
-              <TerminalView hostId={activeHost.id} />
+              <TerminalView
+                hostId={activeHost.id}
+                onConnected={() => setStatus('connected')}
+                onError={(message) => {
+                  setStatus('error');
+                  setErrorMsg(message);
+                }}
+                onClosed={() => {
+                  setStatus('error');
+                  setErrorMsg('SSH connection closed. Reconnect from the host list to open a new shell.');
+                }}
+              />
             </div>
           </>
         ) : (
@@ -511,6 +597,103 @@ function App() {
                 <button type="submit" className="px-4 py-2 bg-primary text-background text-sm font-medium rounded-md hover:bg-primary/90 transition">Save Host</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isAccountOpen && (
+        <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center">
+          <div className="bg-surface border border-border rounded-xl w-[440px] shadow-2xl">
+            <div className="px-6 py-4 border-b border-border flex justify-between items-center">
+              <h3 className="font-semibold text-white">Account</h3>
+              <button onClick={() => setIsAccountOpen(false)} className="text-textMuted hover:text-white transition">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div className="min-w-0">
+                  <div className="text-sm text-white truncate">{session.user.email}</div>
+                  <div className="text-xs text-textMuted">{session.user.role === 'admin' ? 'Administrator' : 'User'}</div>
+                </div>
+                {session.user.role === 'admin' && (
+                  <button onClick={openUsers} className="px-3 py-2 bg-white/5 hover:bg-white/10 text-sm text-white rounded-md flex items-center gap-2">
+                    <ShieldCheck size={16} />
+                    <span>Users</span>
+                  </button>
+                )}
+              </div>
+              {accountError && <div className="mb-3 p-3 bg-red-500/10 text-red-400 border border-red-500/20 rounded-md text-xs">{accountError}</div>}
+              {accountNotice && <div className="mb-3 p-3 bg-green-500/10 text-green-300 border border-green-500/20 rounded-md text-xs">{accountNotice}</div>}
+              <form onSubmit={changePassword} className="space-y-3">
+                <input value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required type="password" placeholder="Current password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary" />
+                <input value={nextPassword} onChange={e => setNextPassword(e.target.value)} required minLength={8} type="password" placeholder="New password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary" />
+                <input value={confirmNextPassword} onChange={e => setConfirmNextPassword(e.target.value)} required minLength={8} type="password" placeholder="Confirm new password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary" />
+                <div className="flex justify-end">
+                  <button type="submit" className="px-4 py-2 bg-primary text-background text-sm font-medium rounded-md hover:bg-primary/90">Change Password</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isUsersOpen && (
+        <div className="absolute inset-0 bg-black/60 z-[60] flex items-center justify-center">
+          <div className="bg-surface border border-border rounded-xl w-[min(760px,calc(100vw-32px))] max-h-[min(720px,calc(100vh-32px))] shadow-2xl flex flex-col">
+            <div className="px-6 py-4 border-b border-border flex justify-between items-center">
+              <h3 className="font-semibold text-white">User Approval</h3>
+              <button onClick={() => setIsUsersOpen(false)} className="text-textMuted hover:text-white transition">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="overflow-auto">
+              {usersLoading ? (
+                <div className="p-8 flex items-center justify-center gap-2 text-sm text-textMuted">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Loading users...</span>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-surface text-left text-xs text-textMuted">
+                    <tr>
+                      <th className="px-5 py-3 font-medium">Account</th>
+                      <th className="px-3 py-3 font-medium">Role</th>
+                      <th className="px-3 py-3 font-medium">Status</th>
+                      <th className="px-3 py-3 font-medium">Email Check</th>
+                      <th className="px-5 py-3 font-medium text-right">Review</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {managedUsers.map(user => (
+                      <tr key={user.id} className="border-t border-border align-middle">
+                        <td className="px-5 py-3">
+                          <div className="text-white">{user.username || user.email}</div>
+                          {user.username && <div className="text-xs text-textMuted">{user.email}</div>}
+                        </td>
+                        <td className="px-3 py-3 text-textMuted">{user.role}</td>
+                        <td className="px-3 py-3 text-white">{user.approvalStatus}</td>
+                        <td className="px-3 py-3 text-textMuted">{user.emailCheckResult || 'manual'}</td>
+                        <td className="px-5 py-3">
+                          {user.role === 'admin' ? (
+                            <div className="text-right text-xs text-textMuted">Protected</div>
+                          ) : (
+                            <div className="flex justify-end gap-2">
+                              <button onClick={() => reviewUser(user.id, 'approved')} title="Approve" className="p-2 bg-green-500/10 hover:bg-green-500/20 text-green-300 rounded-md">
+                                <Check size={16} />
+                              </button>
+                              <button onClick={() => reviewUser(user.id, 'rejected')} title="Reject" className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-300 rounded-md">
+                                <X size={16} />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
       )}

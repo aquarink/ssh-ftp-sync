@@ -35,7 +35,9 @@ ipcMain.on('ssh-connect', (event, { id, host, port, username, password, privateK
     port: port || 22,
     username: username,
     password: password,
-    privateKey: privateKey
+    privateKey: privateKey,
+    keepaliveInterval: 25000,
+    keepaliveCountMax: 3
   });
 });
 
