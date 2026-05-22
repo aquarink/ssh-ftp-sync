@@ -1,44 +1,47 @@
 # PROJECT_STATE.md (AI Agent Instructions)
 
-**Hello AI Agent!** 
+**Hello AI Agent (Codex)!** 
 If you are reading this, your job is to assist the user in building this Termius-Alternative (SSH/FTP Client). This document serves as the absolute source of truth for the project's current state, architecture, and next steps.
 
-## Project Context
-The user wants a premium, cross-platform Desktop SSH/FTP client similar to Termius.
-- **Tech Stack**: Electron, React, Vite, TailwindCSS.
-- **Backend/Sync**: Supabase (for syncing hosts/credentials across devices).
-- **Core Logic**: Node.js `ssh2` module (for SSH/SFTP backend), `xterm.js` (for frontend terminal).
+---
+
+## 🟢 Completed (Phases 1, 2, & 4)
+
+- **Phase 1 (Foundation)**:
+  - Initialized project with React, TypeScript, and Vite.
+  - TailwindCSS configured for dark-mode layout.
+  - Electron shell set up (`electron/main.js` and `electron/preload.js`).
+  - Running via `npm run desktop` starts both Vite and Electron.
+- **Phase 2 (SSH Terminal)**:
+  - Terminal view (`src/components/TerminalView.tsx`) uses `xterm.js`.
+  - Electron main process manages SSH2 socket connections (`electron/sshHandler.js`).
+- **Phase 4 (Cloud Sync - Secure Auth Revert)**:
+  - Switched from custom DB auth back to secure **native Supabase Authentication** (`supabase.auth`) for production safety.
+  - Added session listeners (`getSession` and `onAuthStateChange`) in `src/App.tsx`.
+  - Refactored `hosts` queries to use `session.user.id` and leverage Row Level Security (RLS).
+  - Created `migrate.js` in the project root to run database schema setup.
+  - **Zero TypeScript errors** (compiled successfully with `npx tsc --noEmit`).
 
 ---
 
-## 🟢 Completed (Phase 1)
-- [x] Initialized project with `create-vite` (React + TypeScript).
-- [x] Configured TailwindCSS for a premium dark-mode aesthetic.
-- [x] Setup Electron shell (`electron/main.js` and `electron/preload.js`).
-- [x] Created the basic UI Layout (`src/App.tsx`):
-  - Sidebar Navigation.
-  - Hosts List Panel (with dummy data).
-  - Main Terminal Area layout.
-- [x] Configured `npm run desktop` script to launch the Vite server + Electron window simultaneously.
+## 🔴 Current Block & Roadblock (Action Required First!)
+
+### 1. Database Table Creation (IPv4 Pooler Issue)
+The user's local network does not support IPv6. The default direct database connection `db.iuccdegvxugrnmgwzwtj.supabase.co` fails with `ENOTFOUND` during migration.
+- **Fix**: The user needs to toggle **"Session pooler"** (or Transaction pooler) in their Supabase Dashboard (**Project Settings -> Database -> Connection Pooler**) to get the IPv4-compatible hostname (e.g. `aws-0-[region].pooler.supabase.com`).
+- **Action**: Run `node migrate.js` on local terminal, paste the Pooler URI when prompted, and it will automatically set up the `hosts` table with active Row Level Security (RLS) and policies.
 
 ---
 
-## 🟡 Currently Working On (Phase 2 - SSH Terminal)
-This is what you should focus on next if the user asks to continue:
-1. **Initialize `xterm.js`**: Create a React component that mounts an `xterm.js` terminal instance inside the Main Area.
-2. **Node.js SSH Integration**:
-   - Establish an IPC bridge between React (Renderer) and Electron (Main Process).
-   - Use the `ssh2` library in `electron/main.js` to connect to a real SSH server.
-   - Forward terminal input/output (pty) between `xterm.js` and the `ssh2` session via IPC channels.
-3. **Dynamic Host Form**: Create a modal/form in React for the user to input IP, Port, Username, and Password, which will be passed to the SSH connector.
+## 🟡 Next Steps (Phase 3 - SFTP Manager)
 
----
-
-## 🔴 Pending (Phase 3 & 4)
-- **Phase 3 (SFTP Manager)**: Build a file explorer UI to navigate, upload, download, and delete files on the remote server using the SFTP channel from `ssh2`.
-- **Phase 4 (Cloud Sync)**: Integrate Supabase authentication (Login/Register). Encrypt the SSH credentials on the client-side before uploading them to the Supabase database to ensure the user's keys/passwords are secure.
-
-## Important Notes for AI Agents
-- **Styling**: Always prioritize aesthetics. Use rich colors, subtle borders (`border-border`), and micro-interactions (hover states). The UI MUST feel premium (like Termius). Do NOT make it look like a basic bootstrap app.
-- **Electron IPC**: Ensure proper Context Isolation rules are followed if possible, or use standard IPC if `contextIsolation` is explicitly disabled in `main.js`. (Currently `contextIsolation` is `false` for MVP speed, but keep security in mind).
-- **Update this file**: Whenever you finish a major milestone, PLEASE update this `PROJECT_STATE.md` file so the next agent knows what's been done.
+Once database tables are created:
+1. **Test Authentication**: Run `npm run desktop`, register a new account, log in, add hosts, and verify they sync securely to Supabase.
+2. **SFTP Browser UI**:
+   - Build a split-pane or toggleable file explorer view next to the Terminal area.
+   - Design directories and files table (displaying name, size, permissions, modified date).
+3. **SFTP Backend Handlers**:
+   - Implement directory reading (`sftp.readdir`), download, upload, and delete operations in Electron's Main process (`electron/main.js` or separate helper) via the established `ssh2` SFTP channel.
+   - Bridge SFTP operations via Electron IPC (`sftp-list`, `sftp-download`, `sftp-upload`).
+4. **Drag & Drop**:
+   - Allow drag-and-drop transfers between the local file system and the remote SFTP file browser panel.
