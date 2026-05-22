@@ -1,3 +1,5 @@
+const { ipcRenderer } = require('electron');
+
 window.addEventListener('DOMContentLoaded', () => {
   const replaceText = (selector: string, text: string) => {
     const element = document.getElementById(selector);
@@ -8,3 +10,5 @@ window.addEventListener('DOMContentLoaded', () => {
     replaceText(`${dependency}-version`, process.versions[dependency] as string);
   }
 });
+
+window.ipcRenderer = ipcRenderer;

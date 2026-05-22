@@ -24,6 +24,9 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
 
+  // Initialize SSH handler
+  require('./sshHandler');
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
