@@ -1,72 +1,265 @@
-# SSH/FTP Sync - Termius Alternative
+# Ant Tech Async SSH Client
 
-A modern, cross-platform SSH and SFTP client built with Electron, React, and TailwindCSS. Features a dark desktop UI and self-hosted host sync.
+> Working name. Final open source project name may change.
 
-## Features (Roadmap)
-- 🖥️ **Native Desktop App**: Built using Electron for Mac and Windows.
-- 🎨 **Beautiful UI**: Modern, dark-themed UI using TailwindCSS and Lucide Icons.
-- 💻 **Interactive Terminal**: Full-featured SSH terminal powered by `xterm.js` over Electron IPC or an authenticated browser WebSocket relay.
-- 📁 **SFTP File Manager**: Manage remote files seamlessly.
-- ☁️ **Cloud Sync**: Synchronize hosts across devices through the self-hosted API.
-- ✅ **Controlled Signup**: New signup emails are checked server-side before an administrator approves access.
-- 🛡️ **Bot Gate**: Login and register forms require Cloudflare Turnstile validation on the API.
-- 🧱 **Preview WAF**: The deployed Nginx vhost runs ModSecurity with OWASP CRS.
+[![Status](https://img.shields.io/badge/status-research-orange)](#)
+[![Stack](https://img.shields.io/badge/stack-React%20%2B%20Electron%20%2B%20Node-blue)](#)
+[![License](https://img.shields.io/badge/license-TBD-lightgrey)](#license)
+
+Ant Tech Async SSH Client is an experimental open source SSH/SFTP/FTP client for self-hosted infrastructure management. It combines a modern web dashboard, an Electron desktop runtime, a multi-session terminal manager, and a Node.js backend for authenticated browser preview.
+
+The project is inspired by the operational workflows of tools such as Termius, MobaXterm, Tabby, and VSCode Remote, while remaining an original implementation focused on self-hosted control, modular architecture, and research-friendly extensibility.
+
+## Main Features
+
+- Multiple SSH tabs.
+- Multi-session terminal management.
+- SFTP/FTP file manager.
+- Secure SSH identities/keychain.
+- SSH private key and certificate support.
+- Browser mode through authenticated WebSocket relay.
+- Electron desktop mode.
+- Host management with create, edit, duplicate, delete, and identity assignment.
+- Session management with HttpOnly cookies.
+- Cross-platform direction for Linux, Windows, and macOS.
+- Admin/user approval system.
+- Cloudflare Turnstile-protected auth forms.
+- Modern dark UI built with TailwindCSS and Lucide icons.
+- Experimental research features for plugins, AI-assisted terminal workflows, and team collaboration.
+
+## Screenshots
+
+Screenshots will be added as the open source UI stabilizes.
+
+| View | Preview |
+| --- | --- |
+| Landing page | _Coming soon_ |
+| SSH terminal | _Coming soon_ |
+| File manager | _Coming soon_ |
+| Keychain manager | _Coming soon_ |
 
 ## Tech Stack
-- **Framework**: Electron + React + Vite
-- **Language**: TypeScript / JavaScript
-- **Styling**: TailwindCSS
-- **Core Libraries**: `ssh2` (SSH connection), `xterm.js` (Terminal emulator), `mysql2` (MySQL API storage)
 
-## Getting Started
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, TypeScript, Vite |
+| Styling | TailwindCSS |
+| Desktop | Electron |
+| Backend | Node.js HTTP API |
+| Database | MySQL |
+| Terminal | xterm.js |
+| SSH/SFTP | ssh2 |
+| Browser SSH Relay | WebSocket |
+| Deployment | Nginx |
+| Security Add-ons | HttpOnly cookies, Turnstile, optional Nginx WAF |
+
+## Installation
 
 ### Prerequisites
-- Node.js (v18 or higher recommended)
-- npm
 
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/aquarink/ssh-ftp-sync.git
-   cd ssh-ftp-sync
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+- Node.js 18 or newer.
+- npm.
+- MySQL 8 or compatible.
+- Nginx for production deployment.
 
-### Development
-Copy `.env.example` to `.env`, set the MySQL connection values, and apply the schema:
+### Clone
+
+```bash
+git clone https://github.com/aquarink/ssh-ftp-sync.git
+cd ssh-ftp-sync
+```
+
+### Install Dependencies
+
+```bash
+npm install
+```
+
+### Configure Environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your local values.
+
+### Run Database Migrations
+
 ```bash
 npm run migrate
 ```
 
-Set `QUICKEMAILVERIFICATION_API_KEY` in `.env` to validate signup emails.
-Set `VITE_TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` for the Turnstile form widget and backend Siteverify check.
+### Start Development API
 
-Create or rotate an administrator account with:
-```bash
-npm run create-admin -- <username> <strong-password>
-```
-
-Start the self-hosted API in one terminal:
 ```bash
 npm run api
 ```
 
-To run the app in development mode with live-reloading:
-```bash
-npm run desktop
-```
-*(This command starts the Vite dev server and launches the native Electron window)*
+### Start Browser Development UI
 
-To preview just the UI in your browser without Electron:
 ```bash
 npm run dev
 ```
 
-### Build for Production
-To package the app into a standalone installer (.dmg, .exe):
+Open:
+
+```text
+http://127.0.0.1:5173/
+```
+
+### Start Electron Development App
+
+```bash
+npm run desktop
+```
+
+### Build Electron Package
+
 ```bash
 npm run build
 ```
+
+### Production Notes
+
+For production-style browser deployment:
+
+1. Build the Vite app.
+2. Serve `dist/` from Nginx.
+3. Proxy `/api/` and `/api/ssh` to the Node API.
+4. Run migrations before deploying backend changes.
+5. Use strong secrets and a secure vault key.
+
+## Environment Variables
+
+See `.env.example` for the current template. Common values include:
+
+```bash
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DATABASE=ant_tech_async
+MYSQL_USER=ant_tech_async
+MYSQL_PASSWORD=change-me
+
+API_PORT=8790
+SESSION_DAYS=30
+SESSION_SECRET=change-me
+
+VITE_TURNSTILE_SITE_KEY=your-site-key
+TURNSTILE_SECRET_KEY=your-secret-key
+
+QUICKEMAILVERIFICATION_API_KEY=optional
+CREDENTIAL_VAULT_KEY=change-me
+CREDENTIAL_VAULT_DIR=.credential-vault
+```
+
+Never commit `.env`, vault files, private keys, passphrases, passwords, or production tokens.
+
+## Development Workflow
+
+### Frontend
+
+- Source: `src/`
+- Main app shell: `src/App.tsx`
+- Terminal view: `src/components/TerminalView.tsx`
+- SFTP manager: `src/components/SftpFileManager.tsx`
+- Keychain manager: `src/components/KeychainPanel.tsx`
+- API client: `src/lib/api.ts`
+
+### Backend
+
+- Source: `server/`
+- Main API router: `server/index.js`
+- Auth/session helpers: `server/auth.js`
+- MySQL pool: `server/db.js`
+- SFTP service: `server/sftpService.js`
+- Browser SSH relay: `server/sshWebSocket.js`
+- Credential vault helpers: `server/credentialStore.js`
+
+### Electron
+
+- Main process: `electron/main.js`
+- Preload bridge: `electron/preload.js`
+- SSH IPC handlers: `electron/sshHandler.js`
+- Terminal session manager: `electron/terminalSessionManager.js`
+- Desktop secure storage helper: `electron/credentialVault.js`
+
+### WebSocket Relay
+
+Browser mode uses `/api/ssh` as an authenticated WebSocket relay. The backend resolves the user session, validates host ownership, and opens the SSH connection through `ssh2`.
+
+### Database Migrations
+
+Migrations live in `db/migrations/` and are applied by:
+
+```bash
+npm run migrate
+```
+
+## Security Notes
+
+This project is still experimental and requires additional security audit before production use.
+
+- Do not expose secrets in logs, API responses, localStorage, or database metadata.
+- Host rows should store metadata and identity references, not raw private keys or passphrases.
+- Browser/server mode stores identity secrets in an encrypted vault.
+- Electron mode uses OS-backed secure storage through Electron `safeStorage`.
+- Session cookies are HttpOnly.
+- Login/register are protected by Turnstile when configured.
+- Admin approval is required before normal users can sign in.
+- SSH certificate and agent support are active compatibility research areas.
+
+## Open Source & Contribution
+
+This repository is being prepared as an open source research project.
+
+Contributions are welcome, especially around:
+
+- SSH session lifecycle and reliability.
+- SFTP/FTP abstraction.
+- Secure vault/keychain providers.
+- Cross-platform Electron compatibility.
+- Windows/Linux/macOS testing.
+- UI/UX for server operations.
+- Documentation and architecture diagrams.
+
+Before opening a large pull request, please create an issue or discussion describing the proposal. The architecture may evolve quickly during the research stage, and API/schema changes are still expected.
+
+Suggested contribution flow:
+
+1. Fork the repository.
+2. Create a focused feature branch.
+3. Run migrations and local verification.
+4. Keep changes scoped and documented.
+5. Open a pull request with screenshots or terminal output when relevant.
+
+## Roadmap
+
+- [x] SSH terminal.
+- [x] Authentication system.
+- [x] Admin approval.
+- [x] Landing page.
+- [x] Host create/delete.
+- [x] Host edit/duplicate.
+- [x] Multiple tabs.
+- [x] SFTP manager.
+- [x] Keychain / SSH identities.
+- [ ] FTP support.
+- [ ] SSH certificates hardening.
+- [ ] Session persistence.
+- [ ] Host grouping and filters.
+- [ ] Remote monitoring.
+- [ ] Plugin system.
+- [ ] AI-assisted terminal workflows.
+- [ ] Team collaboration.
+- [ ] Security audit.
+- [ ] Stable open source release.
+
+## License
+
+License is not finalized yet.
+
+Planned direction: an open source license such as MIT, Apache-2.0, or AGPL-3.0. Final selection will be made before the first public release.
+
+## Disclaimer
+
+This project is in an experimental research stage. It is not recommended for production use without additional security review, infrastructure hardening, credential storage review, and operational testing.
