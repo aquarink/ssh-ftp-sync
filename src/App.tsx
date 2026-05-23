@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy } from 'lucide-react';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
@@ -32,7 +32,30 @@ function App() {
   const [editingHost, setEditingHost] = useState<Host | null>(null);
   const [removeSavedCredential, setRemoveSavedCredential] = useState(false);
   const [isHostSidebarHovered, setIsHostSidebarHovered] = useState(false);
-  const [isHostSidebarPinned, setIsHostSidebarPinned] = useState(() => localStorage.getItem('hostSidebarPinned') === 'true');
+  const [leftSidebarPinned, setLeftSidebarPinned] = useState(() => {
+    const val = localStorage.getItem('leftSidebarPinned');
+    return val !== null ? val === 'true' : true;
+  });
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(() => {
+    const val = localStorage.getItem('leftSidebarWidth');
+    return val ? parseInt(val) : 288;
+  });
+
+  const [rightPanelVisible, setRightPanelVisible] = useState(() => {
+    const val = localStorage.getItem('rightPanelVisible');
+    return val !== null ? val === 'true' : true;
+  });
+  const [rightPanelPinned, setRightPanelPinned] = useState(() => {
+    const val = localStorage.getItem('rightPanelPinned');
+    return val !== null ? val === 'true' : true;
+  });
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => {
+    const val = localStorage.getItem('rightPanelWidth');
+    return val ? parseInt(val) : 360;
+  });
+
+  const [hostSearchQuery, setHostSearchQuery] = useState('');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
 
   // Auth states
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -71,12 +94,88 @@ function App() {
     setRoute(path);
   };
 
-  const isHostSidebarExpanded = isHostSidebarPinned || isHostSidebarHovered;
+  const isHostSidebarExpanded = leftSidebarPinned || isHostSidebarHovered;
 
   useEffect(() => {
-    localStorage.setItem('hostSidebarPinned', String(isHostSidebarPinned));
-    localStorage.setItem('hostSidebarCollapsed', String(!isHostSidebarExpanded));
-  }, [isHostSidebarPinned, isHostSidebarExpanded]);
+    localStorage.setItem('leftSidebarPinned', String(leftSidebarPinned));
+    localStorage.setItem('leftSidebarCollapsed', String(!isHostSidebarExpanded));
+    localStorage.setItem('leftSidebarWidth', String(leftSidebarWidth));
+  }, [leftSidebarPinned, isHostSidebarExpanded, leftSidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem('rightPanelVisible', String(rightPanelVisible));
+    localStorage.setItem('rightPanelPinned', String(rightPanelPinned));
+    localStorage.setItem('rightPanelWidth', String(rightPanelWidth));
+  }, [rightPanelVisible, rightPanelPinned, rightPanelWidth]);
+
+  // Extract all unique tags from hosts
+  const allTags = useMemo(() => {
+    const tagsSet = new Set<string>();
+    hosts.forEach(h => {
+      if (h.tags) {
+        h.tags.split(',').forEach(t => {
+          const trimmed = t.trim();
+          if (trimmed) tagsSet.add(trimmed);
+        });
+      }
+    });
+    return Array.from(tagsSet);
+  }, [hosts]);
+
+  // Filtered hosts based on search query and selected tag
+  const filteredHosts = useMemo(() => {
+    return hosts.filter(h => {
+      const matchSearch = 
+        h.name.toLowerCase().includes(hostSearchQuery.toLowerCase()) ||
+        h.host.toLowerCase().includes(hostSearchQuery.toLowerCase()) ||
+        (h.username && h.username.toLowerCase().includes(hostSearchQuery.toLowerCase()));
+      
+      const matchTag = !selectedTag || (h.tags && h.tags.split(',').map(t => t.trim()).includes(selectedTag));
+
+      return matchSearch && matchTag;
+    });
+  }, [hosts, hostSearchQuery, selectedTag]);
+
+  // Mouse drag handlers for resizing panels
+  const startLeftResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = leftSidebarWidth;
+
+    const doResize = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const newWidth = Math.max(200, Math.min(480, startWidth + deltaX));
+      setLeftSidebarWidth(newWidth);
+    };
+
+    const stopResize = () => {
+      window.removeEventListener('mousemove', doResize);
+      window.removeEventListener('mouseup', stopResize);
+    };
+
+    window.addEventListener('mousemove', doResize);
+    window.addEventListener('mouseup', stopResize);
+  };
+
+  const startRightResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = rightPanelWidth;
+
+    const doResize = (moveEvent: MouseEvent) => {
+      const deltaX = startX - moveEvent.clientX; // Drag left increases right panel width
+      const newWidth = Math.max(260, Math.min(600, startWidth + deltaX));
+      setRightPanelWidth(newWidth);
+    };
+
+    const stopResize = () => {
+      window.removeEventListener('mousemove', doResize);
+      window.removeEventListener('mouseup', stopResize);
+    };
+
+    window.addEventListener('mousemove', doResize);
+    window.addEventListener('mouseup', stopResize);
+  };
 
   useEffect(() => {
     const onPopState = () => setRoute(window.location.pathname);
@@ -626,122 +725,196 @@ function App() {
       <div
         onMouseEnter={() => setIsHostSidebarHovered(true)}
         onMouseLeave={() => setIsHostSidebarHovered(false)}
-        className={`${isHostSidebarExpanded ? 'w-72' : 'w-[72px]'} bg-[#161b22]/50 border-r border-border flex flex-col shrink-0 z-30 transition-[width] duration-200 ease-out`}
+        style={{
+          width: isHostSidebarExpanded ? `${leftSidebarWidth}px` : '72px'
+        }}
+        className={`relative bg-[#161b22]/90 border-r border-border flex flex-col shrink-0 transition-[width] duration-200 ease-out z-30 h-full ${
+          !leftSidebarPinned && isHostSidebarHovered ? 'absolute left-16 shadow-2xl' : ''
+        }`}
       >
-        <div className={`h-14 border-b border-border flex items-center ${isHostSidebarExpanded ? 'justify-between px-3' : 'justify-center px-2'} gap-2 shrink-0`}>
-          {isHostSidebarExpanded && <span className="font-semibold text-sm truncate">Hosts</span>}
-          <button
-            onClick={() => setIsHostSidebarPinned(value => !value)}
-            title={isHostSidebarPinned ? 'Unpin host sidebar' : 'Pin host sidebar'}
-            aria-label={isHostSidebarPinned ? 'Unpin host sidebar' : 'Pin host sidebar'}
-            className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition"
-          >
-            {isHostSidebarPinned ? <Pin size={15} /> : <PinOff size={15} />}
-          </button>
-          <button onClick={openAddHost} title="Add host" aria-label="Add host" className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition">
-            <Plus size={16} />
-          </button>
+        {/* Sticky Top Section */}
+        <div className="p-3 border-b border-border flex flex-col gap-2 shrink-0">
+          <div className={`flex items-center ${isHostSidebarExpanded ? 'justify-between' : 'justify-center'} gap-2`}>
+            {isHostSidebarExpanded && (
+              <span className="font-semibold text-sm truncate flex items-center gap-1.5 text-white">
+                <Server size={15} className="text-primary" />
+                Hosts
+              </span>
+            )}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setLeftSidebarPinned(val => !val)}
+                title={leftSidebarPinned ? 'Unpin host sidebar' : 'Pin host sidebar'}
+                className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition cursor-pointer"
+              >
+                {leftSidebarPinned ? <Pin size={14} /> : <PinOff size={14} />}
+              </button>
+              {isHostSidebarExpanded && (
+                <button
+                  onClick={openAddHost}
+                  title="Add host"
+                  className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition cursor-pointer"
+                >
+                  <Plus size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+          {isHostSidebarExpanded && (
+            <>
+              {/* Search Host Input */}
+              <input
+                type="text"
+                placeholder="Search hosts..."
+                value={hostSearchQuery}
+                onChange={e => setHostSearchQuery(e.target.value)}
+                className="w-full bg-background border border-border rounded px-2.5 py-1 text-xs text-white placeholder-textMuted/50 focus:outline-none focus:border-primary transition"
+              />
+              
+              {/* Tags/Groups selection if any tags exist */}
+              {allTags.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1 max-h-16 overflow-y-auto pr-1">
+                  <button
+                    onClick={() => setSelectedTag(null)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition ${
+                      selectedTag === null ? 'bg-primary text-background font-semibold' : 'bg-white/5 text-textMuted hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    All
+                  </button>
+                  {allTags.map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition ${
+                        selectedTag === tag ? 'bg-primary text-background font-semibold' : 'bg-white/5 text-textMuted hover:bg-white/10 hover:text-white'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
-        <div className={`flex-1 overflow-y-auto ${isHostSidebarExpanded ? 'p-2' : 'px-2 py-2'} space-y-1 overflow-x-visible`}>
+
+        {/* Scrollable Host List */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-1 select-none overflow-x-hidden">
           {loadingHosts ? (
             <div className="p-4 flex flex-col items-center space-y-2 text-center text-xs text-textMuted">
               <Loader2 size={16} className="animate-spin text-primary" />
               {isHostSidebarExpanded && <span>Syncing hosts...</span>}
             </div>
-          ) : hosts.length === 0 ? (
-            <div className="p-4 text-center text-xs text-textMuted">{isHostSidebarExpanded ? 'No hosts added yet.' : 'Empty'}</div>
+          ) : filteredHosts.length === 0 ? (
+            <div className="p-4 text-center text-xs text-textMuted">
+              {isHostSidebarExpanded ? 'No hosts found.' : 'Empty'}
+            </div>
           ) : (
-            hosts.map(h => {
+            filteredHosts.map(h => {
               const status = hostStatus(h.id);
               const tooltipId = `host-tooltip-${h.id}`;
               return (
-              <div 
-                key={h.id} 
-                onClick={() => connectToHost(h)}
-                title={`${h.name} - ${h.username}@${h.host}:${h.port}`}
-                aria-label={`Connect to ${h.name}, ${h.username} at ${h.host} port ${h.port}, ${h.authType || 'password'} authentication, ${status} status`}
-                aria-describedby={tooltipId}
-                className={`relative flex items-center ${isHostSidebarExpanded ? 'gap-3 p-2' : 'justify-center p-2'} rounded-md cursor-pointer transition group ${activeTab?.hostId === h.id ? 'bg-primary/10' : 'hover:bg-white/5'}`}
-              >
-                <div className={`relative w-9 h-9 rounded-md flex items-center justify-center shrink-0 ${activeTab?.hostId === h.id ? 'bg-primary/20 text-primary' : 'bg-white/5 text-textMuted group-hover:text-white'}`}>
-                  <Server size={16} />
-                  <span className={`absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-[#161b22] ${hostStatusClass(status)}`} />
-                </div>
-                {isHostSidebarExpanded && (
-                  <>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate text-white">{h.name}</div>
-                      <div className="text-xs text-textMuted truncate">{h.username}@{h.host}</div>
-                      <div className="text-[10px] text-textMuted truncate capitalize">{status}</div>
-                    </div>
-                    <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-1 shrink-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          connectToHost(h);
-                        }}
-                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-primary transition"
-                        title="Connect"
-                        aria-label={`Connect to ${h.name}`}
-                      >
-                        <Play size={12} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openEditHost(h);
-                        }}
-                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-white transition"
-                        title="Edit host"
-                        aria-label={`Edit ${h.name}`}
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openDuplicateHost(h);
-                        }}
-                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-white transition"
-                        title="Duplicate host"
-                        aria-label={`Duplicate ${h.name}`}
-                      >
-                        <Copy size={12} />
-                      </button>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm(`Are you sure you want to delete ${h.name}?`)) {
-                            handleDeleteHost(h.id);
-                          }
-                        }} 
-                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-red-400 transition"
-                        title="Delete host"
-                        aria-label={`Delete ${h.name}`}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </>
-                )}
-                <div
-                  id={tooltipId}
-                  role="tooltip"
-                  className="pointer-events-none absolute left-2 right-2 top-[calc(100%+6px)] rounded-md border border-border bg-surface px-3 py-2 text-xs shadow-2xl opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition z-50"
+                <div 
+                  key={h.id} 
+                  onClick={() => connectToHost(h)}
+                  title={`${h.name} - ${h.username}@${h.host}:${h.port}`}
+                  aria-label={`Connect to ${h.name}, ${h.username} at ${h.host} port ${h.port}, ${h.authType || 'password'} authentication, ${status} status`}
+                  aria-describedby={tooltipId}
+                  className={`relative flex items-center ${isHostSidebarExpanded ? 'gap-3 p-2' : 'justify-center p-2'} rounded-md cursor-pointer transition group ${activeTab?.hostId === h.id ? 'bg-primary/10 border-l-2 border-primary' : 'hover:bg-white/5 border-l-2 border-transparent'}`}
                 >
-                  <div className="font-semibold text-white truncate">{h.name}</div>
-                  <div className="mt-1 grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-1 text-textMuted">
-                    <span>Host</span><span className="truncate text-textMain">{h.host}</span>
-                    <span>User</span><span className="truncate text-textMain">{h.username}</span>
-                    <span>Port</span><span className="text-textMain">{h.port}</span>
-                    <span>Auth</span><span className="truncate text-textMain">{h.authType || 'password'}</span>
-                    <span>Status</span><span className="capitalize text-textMain">{status}</span>
+                  <div className={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 ${activeTab?.hostId === h.id ? 'bg-primary/20 text-primary' : 'bg-white/5 text-textMuted group-hover:text-white'}`}>
+                    <Server size={14} />
+                    <span className={`absolute -right-0.5 -bottom-0.5 w-2 h-2 rounded-full ring-2 ring-[#161b22] ${hostStatusClass(status)}`} />
+                  </div>
+                  {isHostSidebarExpanded && (
+                    <>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold truncate text-white">{h.name}</div>
+                        <div className="text-[10px] text-textMuted truncate">{h.username}@{h.host}</div>
+                        {h.tags && (
+                          <div className="flex gap-1 mt-0.5 overflow-hidden">
+                            {h.tags.split(',').map(tag => (
+                              <span key={tag} className="text-[8px] px-1 bg-white/5 text-textMuted rounded-sm max-w-[60px] truncate">{tag.trim()}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 shrink-0 transition-opacity duration-150">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            connectToHost(h);
+                          }}
+                          className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-primary transition"
+                          title="Connect"
+                        >
+                          <Play size={11} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditHost(h);
+                          }}
+                          className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-white transition"
+                          title="Edit host"
+                        >
+                          <Pencil size={11} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDuplicateHost(h);
+                          }}
+                          className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-white transition"
+                          title="Duplicate host"
+                        >
+                          <Copy size={11} />
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm(`Are you sure you want to delete ${h.name}?`)) {
+                              handleDeleteHost(h.id);
+                            }
+                          }} 
+                          className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-red-400 transition"
+                          title="Delete host"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  <div
+                    id={tooltipId}
+                    role="tooltip"
+                    className="pointer-events-none absolute left-2 right-2 top-[calc(100%+6px)] rounded-md border border-border bg-surface px-3 py-2 text-[10px] shadow-2xl opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition z-50"
+                  >
+                    <div className="font-semibold text-white truncate">{h.name}</div>
+                    <div className="mt-1 grid grid-cols-[50px_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-textMuted">
+                      <span>Host</span><span className="truncate text-textMain">{h.host}</span>
+                      <span>User</span><span className="truncate text-textMain">{h.username}</span>
+                      <span>Port</span><span className="text-textMain">{h.port}</span>
+                      <span>Auth</span><span className="truncate text-textMain">{h.authType || 'password'}</span>
+                      <span>Status</span><span className="capitalize text-textMain">{status}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )})
+              );
+            })
           )}
         </div>
+
+        {/* Resizer Handle: Shows only when expanded and pinned */}
+        {isHostSidebarExpanded && leftSidebarPinned && (
+          <div
+            onMouseDown={startLeftResize}
+            className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-primary/50 transition-colors z-45 group"
+          >
+            <div className="absolute right-0 w-[1px] h-full bg-border group-hover:bg-primary/50" />
+          </div>
+        )}
       </div>
 
       {/* Main Content Area */}
@@ -786,8 +959,9 @@ function App() {
               <div className="px-4 text-xs text-textMuted whitespace-nowrap">{activeTab.status}</div>
             </div>
 
-            <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_360px]">
-              <div className="relative bg-black min-w-0">
+            <div className="flex-1 min-h-0 flex relative overflow-hidden">
+              {/* Terminal View */}
+              <div className="flex-1 relative bg-black min-w-0 h-full">
                 {sshTabs.map(tab => (
                   <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
                     {tab.status === 'connecting' && (
@@ -817,7 +991,48 @@ function App() {
                   </div>
                 ))}
               </div>
-              <SftpFileManager sessionId={activeTab.id} hostId={activeTab.hostId} />
+
+              {/* Center-to-right Resize handle */}
+              {rightPanelVisible && rightPanelPinned && (
+                <div
+                  onMouseDown={startRightResize}
+                  className="w-[4px] h-full cursor-col-resize hover:bg-primary/50 transition-colors z-45 relative group shrink-0"
+                >
+                  <div className="absolute left-0 w-[1px] h-full bg-border group-hover:bg-primary/50" />
+                </div>
+              )}
+
+              {/* FTP/SFTP Panel */}
+              {rightPanelVisible ? (
+                <div
+                  style={{ width: `${rightPanelWidth}px` }}
+                  className={`h-full shrink-0 flex flex-col z-30 bg-[#161b22] ${
+                    !rightPanelPinned
+                      ? 'absolute right-0 top-0 bottom-0 shadow-2xl border-l border-border'
+                      : 'border-l border-border relative'
+                  }`}
+                >
+                  <SftpFileManager
+                    sessionId={activeTab.id}
+                    hostId={activeTab.hostId}
+                    isVisible={rightPanelVisible}
+                    isPinned={rightPanelPinned}
+                    onTogglePin={() => setRightPanelPinned(p => !p)}
+                    onToggleVisible={() => setRightPanelVisible(v => !v)}
+                  />
+                </div>
+              ) : (
+                /* Collapsed Icon Strip (40px) */
+                <div className="w-10 bg-surface border-l border-border flex flex-col items-center py-4 space-y-4 shrink-0 h-full z-30">
+                  <button
+                    onClick={() => setRightPanelVisible(true)}
+                    title="Open Files Panel (FTP/SFTP)"
+                    className="p-2 rounded-lg text-textMuted hover:text-white hover:bg-white/5 transition cursor-pointer"
+                  >
+                    <Folder size={20} />
+                  </button>
+                </div>
+              )}
             </div>
           </>
         ) : (
