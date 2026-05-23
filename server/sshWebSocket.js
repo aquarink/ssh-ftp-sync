@@ -2,6 +2,7 @@ const { Client } = require('ssh2');
 const { WebSocket, WebSocketServer } = require('ws');
 const { getSessionUser } = require('./auth');
 const { pool } = require('./db');
+const { readCredentialSecret } = require('./credentialStore');
 
 const maxTerminalMessageBytes = 64 * 1024;
 const webSocketKeepaliveMs = 25000;
@@ -31,14 +32,25 @@ async function getUserHost(req, url) {
   if (!hostId) throw Object.assign(new Error('Host is required'), { status: 400 });
 
   const [rows] = await pool.execute(
-    `SELECT id, host, port, username, password
+    `SELECT id, host, port, username, password, auth_type, credential_id
        FROM hosts
       WHERE id = ? AND user_id = ?
       LIMIT 1`,
     [hostId, user.id]
   );
   if (!rows[0]) throw Object.assign(new Error('Host not found'), { status: 404 });
-  return rows[0];
+  const host = rows[0];
+  if (!host.credential_id) return host;
+
+  const [credentials] = await pool.execute(
+    `SELECT storage_ref
+       FROM ssh_credentials
+      WHERE id = ? AND user_id = ?
+      LIMIT 1`,
+    [host.credential_id, user.id]
+  );
+  if (!credentials[0]) throw Object.assign(new Error('Assigned SSH credential was not found'), { status: 400 });
+  return { ...host, ...readCredentialSecret(credentials[0].storage_ref) };
 }
 
 function readMessage(raw) {
@@ -128,6 +140,8 @@ function connectShell(ws, host) {
     port: host.port || 22,
     username: host.username,
     password: host.password || undefined,
+    privateKey: host.privateKey || undefined,
+    passphrase: host.passphrase || undefined,
     readyTimeout: 15000,
     keepaliveInterval: webSocketKeepaliveMs,
     keepaliveCountMax: 3,

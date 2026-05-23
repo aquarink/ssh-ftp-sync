@@ -17,12 +17,36 @@ export interface Host {
   port: number;
   username: string;
   password?: string;
+  authType?: 'password' | 'private_key' | 'credential' | 'agent' | 'manual';
+  credentialId?: string | null;
 }
 
 export interface ManagedUser extends User {
   createdAt: string;
   emailCheckResult?: string | null;
   emailSafeToSend?: boolean | null;
+}
+
+export interface SftpEntry {
+  name: string;
+  path: string;
+  size: number;
+  mode: number;
+  permissions: string;
+  mtime: number;
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymbolicLink: boolean;
+}
+
+export interface SshCredential {
+  id: string;
+  type: 'password' | 'private_key' | 'certificate' | 'agent';
+  label: string;
+  username?: string | null;
+  fingerprint?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
@@ -89,5 +113,32 @@ export const api = {
     request<{ user: ManagedUser }>(`/api/admin/users/${encodeURIComponent(id)}/approval`, {
       method: 'PUT',
       body: JSON.stringify({ approvalStatus }),
+    }),
+  listCredentials: () => request<{ credentials: SshCredential[] }>('/api/credentials'),
+  createCredential: (credential: {
+    type: 'password' | 'private_key' | 'certificate' | 'agent';
+    label: string;
+    username?: string;
+    password?: string;
+    privateKey?: string;
+    passphrase?: string;
+  }) =>
+    request<{ credential: SshCredential }>('/api/credentials', {
+      method: 'POST',
+      body: JSON.stringify(credential),
+    }),
+  deleteCredential: (id: string) =>
+    request<{ ok: true }>(`/api/credentials/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  testCredential: (id: string, payload: { host: string; port: number; username: string }) =>
+    request<{ ok: true }>(`/api/credentials/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  sftpOperation: <T = any>(hostId: string, operation: string, payload: Record<string, any>) =>
+    request<T>(`/api/hosts/${encodeURIComponent(hostId)}/sftp/${encodeURIComponent(operation)}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 };

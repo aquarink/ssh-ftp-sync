@@ -4,7 +4,16 @@ import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
 
 interface TerminalViewProps {
+  sessionId: string;
   hostId: string;
+  host?: {
+    host: string;
+    port: number;
+    username: string;
+    password?: string;
+    credentialId?: string | null;
+  };
+  active: boolean;
   onConnected?: () => void;
   onError?: (message: string) => void;
   onClosed?: () => void;
@@ -16,12 +25,12 @@ type SshSocketMessage = {
   data?: string;
 };
 
-function sshSocketUrl(hostId: string) {
+function sshSocketUrl(hostId: string, sessionId: string) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}/api/ssh?hostId=${encodeURIComponent(hostId)}`;
+  return `${protocol}//${window.location.host}/api/ssh?hostId=${encodeURIComponent(hostId)}&sessionId=${encodeURIComponent(sessionId)}`;
 }
 
-export function TerminalView({ hostId, onConnected, onError, onClosed }: TerminalViewProps) {
+export function TerminalView({ sessionId, hostId, host, active, onConnected, onError, onClosed }: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
@@ -56,8 +65,20 @@ export function TerminalView({ hostId, onConnected, onError, onClosed }: Termina
     let socket: WebSocket | null = null;
     let socketFailed = false;
 
+    if (window.ipcRenderer && host) {
+      window.ipcRenderer.send('ssh-connect', {
+        id: sessionId,
+        hostId,
+        host: host.host,
+        port: host.port,
+        username: host.username,
+        password: host.password,
+        credentialId: host.credentialId,
+      });
+    }
+
     if (!window.ipcRenderer) {
-      socket = new WebSocket(sshSocketUrl(hostId));
+      socket = new WebSocket(sshSocketUrl(hostId, sessionId));
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data) as SshSocketMessage;
@@ -85,7 +106,7 @@ export function TerminalView({ hostId, onConnected, onError, onClosed }: Termina
     // Listen to input from the user (typing)
     term.current.onData((data) => {
       if (window.ipcRenderer) {
-        window.ipcRenderer.send('ssh-input', { id: hostId, data });
+        window.ipcRenderer.send('ssh-input', { id: sessionId, data });
       }
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'input', data }));
@@ -97,7 +118,7 @@ export function TerminalView({ hostId, onConnected, onError, onClosed }: Termina
       if (fitAddon.current && term.current && window.ipcRenderer) {
         fitAddon.current.fit();
         window.ipcRenderer.send('ssh-resize', { 
-          id: hostId, 
+          id: sessionId, 
           cols: term.current.cols, 
           rows: term.current.rows 
         });
@@ -115,7 +136,7 @@ export function TerminalView({ hostId, onConnected, onError, onClosed }: Termina
 
     // Listen to data from SSH server
     const onData = (_: any, data: { id: string, data: string }) => {
-      if (data.id === hostId && term.current) {
+      if (data.id === sessionId && term.current) {
         term.current.write(data.data);
       }
     };
@@ -127,13 +148,19 @@ export function TerminalView({ hostId, onConnected, onError, onClosed }: Termina
     return () => {
       window.removeEventListener('resize', handleResize);
       if (window.ipcRenderer) {
-        window.ipcRenderer.send('ssh-disconnect', { id: hostId });
-        window.ipcRenderer.removeAllListeners('ssh-data');
+        window.ipcRenderer.send('ssh-disconnect', { id: sessionId });
+        window.ipcRenderer.removeListener('ssh-data', onData);
       }
       socket?.close();
       term.current?.dispose();
     };
-  }, [hostId]);
+  }, [hostId, host, sessionId]);
+
+  useEffect(() => {
+    if (active) {
+      requestAnimationFrame(() => fitAddon.current?.fit());
+    }
+  }, [active]);
 
   return <div ref={terminalRef} className="w-full h-full p-2" />;
 }

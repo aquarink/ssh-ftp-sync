@@ -1,18 +1,36 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, FolderGit2, Settings, Plus, Server, X, Play, Loader2, LogOut, User, Trash2, Check, ShieldCheck } from 'lucide-react';
+import { Terminal, FolderGit2, Settings, Plus, Server, X, Play, Loader2, LogOut, User, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff } from 'lucide-react';
+import { KeychainPanel } from './components/KeychainPanel';
+import { LandingPage } from './components/LandingPage';
+import { SftpFileManager } from './components/SftpFileManager';
 import { TerminalView } from './components/TerminalView';
-import { api, Host, ManagedUser, Session } from './lib/api';
+import { api, Host, ManagedUser, Session, SshCredential } from './lib/api';
+
+type SshTabStatus = 'connecting' | 'connected' | 'error' | 'closed';
+
+interface SshTab {
+  id: string;
+  hostId: string;
+  name: string;
+  hostname: string;
+  host: Host;
+  status: SshTabStatus;
+  errorMsg?: string;
+}
 
 function App() {
   const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
   const turnstileRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetId = useRef('');
   const [session, setSession] = useState<Session | null>(null);
+  const [route, setRoute] = useState(() => window.location.pathname);
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [activeHost, setActiveHost] = useState<Host | null>(null);
+  const [credentials, setCredentials] = useState<SshCredential[]>([]);
+  const [sshTabs, setSshTabs] = useState<SshTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [isAddingHost, setIsAddingHost] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
-  const [errorMsg, setErrorMsg] = useState('');
+  const [isHostSidebarHovered, setIsHostSidebarHovered] = useState(false);
+  const [isHostSidebarPinned, setIsHostSidebarPinned] = useState(() => localStorage.getItem('hostSidebarPinned') === 'true');
 
   // Auth states
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -40,6 +58,26 @@ function App() {
   const [fPort, setFPort] = useState('22');
   const [fUser, setFUser] = useState('root');
   const [fPass, setFPass] = useState('');
+  const [fAuthType, setFAuthType] = useState<'password' | 'credential'>('password');
+  const [fCredentialId, setFCredentialId] = useState('');
+
+  const navigate = (path: string) => {
+    window.history.pushState({}, '', path);
+    setRoute(path);
+  };
+
+  const isHostSidebarExpanded = isHostSidebarPinned || isHostSidebarHovered;
+
+  useEffect(() => {
+    localStorage.setItem('hostSidebarPinned', String(isHostSidebarPinned));
+    localStorage.setItem('hostSidebarCollapsed', String(!isHostSidebarExpanded));
+  }, [isHostSidebarPinned, isHostSidebarExpanded]);
+
+  useEffect(() => {
+    const onPopState = () => setRoute(window.location.pathname);
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   useEffect(() => {
     api.getSession()
@@ -51,7 +89,20 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!turnstileSiteKey || session) return;
+    if (session && ['/', '/login', '/register'].includes(route)) {
+      window.history.replaceState({}, '', '/app');
+      setRoute('/app');
+    }
+    if (!session && route !== '/' && route !== '/login' && route !== '/register') {
+      window.history.replaceState({}, '', '/');
+      setRoute('/');
+    }
+    if (route === '/register') setAuthMode('register');
+    if (route === '/login') setAuthMode('login');
+  }, [session, route]);
+
+  useEffect(() => {
+    if (!turnstileSiteKey || session || !['/login', '/register'].includes(route)) return;
 
     const renderTurnstile = window.setInterval(() => {
       if (!turnstileRef.current || !window.turnstile || turnstileWidgetId.current) return;
@@ -92,12 +143,25 @@ function App() {
     }
   };
 
+  const fetchCredentials = async () => {
+    if (!session) return;
+    try {
+      const { credentials } = await api.listCredentials();
+      setCredentials(credentials);
+    } catch (err: any) {
+      console.error('Error fetching credentials:', err.message);
+    }
+  };
+
   useEffect(() => {
     if (session) {
       fetchHosts();
+      fetchCredentials();
     } else {
       setHosts([]);
-      setActiveHost(null);
+      setCredentials([]);
+      setSshTabs([]);
+      setActiveTabId(null);
     }
   }, [session]);
 
@@ -105,21 +169,15 @@ function App() {
     if (!window.ipcRenderer) return;
 
     const onConnected = (_: any, { id }: { id: string }) => {
-      if (activeHost && id === activeHost.id) setStatus('connected');
+      setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'connected', errorMsg: '' } : tab));
     };
 
     const onError = (_: any, { id, message }: { id: string, message: string }) => {
-      if (activeHost && id === activeHost.id) {
-        setStatus('error');
-        setErrorMsg(message);
-      }
+      setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'error', errorMsg: message } : tab));
     };
 
     const onClosed = (_: any, { id }: { id: string }) => {
-      if (activeHost && id === activeHost.id) {
-        setStatus('idle');
-        setActiveHost(null);
-      }
+      setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'closed', errorMsg: 'SSH connection closed.' } : tab));
     };
 
     window.ipcRenderer.on('ssh-connected', onConnected);
@@ -128,12 +186,12 @@ function App() {
 
     return () => {
       if (window.ipcRenderer) {
-        window.ipcRenderer.removeAllListeners('ssh-connected');
-        window.ipcRenderer.removeAllListeners('ssh-error');
-        window.ipcRenderer.removeAllListeners('ssh-closed');
+        window.ipcRenderer.removeListener('ssh-connected', onConnected);
+        window.ipcRenderer.removeListener('ssh-error', onError);
+        window.ipcRenderer.removeListener('ssh-closed', onClosed);
       }
     };
-  }, [activeHost]);
+  }, []);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,6 +205,7 @@ function App() {
       if (authMode === 'login') {
         const { user } = await api.login(emailLower, authPassword, turnstileToken);
         setSession({ user });
+        navigate('/app');
 
         // Reset form
         setAuthEmail('');
@@ -173,32 +232,56 @@ function App() {
   };
 
   const handleLogout = async () => {
-    if (activeHost && window.ipcRenderer) {
-      window.ipcRenderer.send('ssh-disconnect', { id: activeHost.id });
+    if (window.ipcRenderer) {
+      sshTabs.forEach(tab => window.ipcRenderer.send('ssh-disconnect', { id: tab.id }));
     }
     await api.logout();
     setSession(null);
+    navigate('/');
   };
 
   const handleAddHost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!session) return;
 
-    const newHostData = {
-      name: fName || fHost,
-      host: fHost,
-      port: parseInt(fPort) || 22,
-      username: fUser,
-      password: fPass
-    };
-
     try {
+      let authType = fAuthType;
+      let credentialId = fAuthType === 'credential' ? fCredentialId : '';
+      const hostName = fName || fHost;
+
+      if (fAuthType === 'password' && fPass) {
+        const { credential } = await api.createCredential({
+          type: 'password',
+          label: `${hostName} password`,
+          username: fUser,
+          password: fPass,
+        });
+        credentialId = credential.id;
+        authType = 'credential';
+        if (window.ipcRenderer) {
+          await window.ipcRenderer.invoke('credential-save-secret', {
+            id: credential.id,
+            secret: { type: 'password', password: fPass },
+          });
+        }
+      }
+
+      const newHostData = {
+        name: hostName,
+        host: fHost,
+        port: parseInt(fPort) || 22,
+        username: fUser,
+        password: '',
+        authType,
+        credentialId: credentialId || null,
+      };
       const { host } = await api.createHost(newHostData);
       setHosts([...hosts, host]);
+      fetchCredentials();
 
       setIsAddingHost(false);
       // reset form
-      setFName(''); setFHost(''); setFPort('22'); setFUser('root'); setFPass('');
+      setFName(''); setFHost(''); setFPort('22'); setFUser('root'); setFPass(''); setFAuthType('password'); setFCredentialId('');
     } catch (err: any) {
       alert('Error saving host: ' + err.message);
     }
@@ -210,13 +293,10 @@ function App() {
       await api.deleteHost(hostId);
 
       setHosts(hosts.filter(h => h.id !== hostId));
-      if (activeHost?.id === hostId) {
-        if (window.ipcRenderer) {
-          window.ipcRenderer.send('ssh-disconnect', { id: hostId });
-        }
-        setActiveHost(null);
-        setStatus('idle');
-      }
+      const closingTabs = sshTabs.filter(tab => tab.hostId === hostId);
+      closingTabs.forEach(tab => window.ipcRenderer?.send('ssh-disconnect', { id: tab.id }));
+      setSshTabs(tabs => tabs.filter(tab => tab.hostId !== hostId));
+      if (closingTabs.some(tab => tab.id === activeTabId)) setActiveTabId(null);
     } catch (err: any) {
       alert('Error deleting host: ' + err.message);
     }
@@ -270,22 +350,55 @@ function App() {
   };
 
   const connectToHost = (host: Host) => {
-    setActiveHost(host);
-    setStatus('connecting');
-    setErrorMsg('');
+    const tabId = crypto.randomUUID();
+    const tab: SshTab = {
+      id: tabId,
+      hostId: host.id,
+      name: host.name,
+      hostname: host.host,
+      host,
+      status: 'connecting',
+    };
+    setSshTabs(tabs => [...tabs, tab]);
+    setActiveTabId(tabId);
+  };
 
-    if (window.ipcRenderer) {
-      window.ipcRenderer.send('ssh-connect', {
-        id: host.id,
-        host: host.host,
-        port: host.port,
-        username: host.username,
-        password: host.password
-      });
-    }
+  const closeTab = (tabId: string) => {
+    window.ipcRenderer?.send('ssh-disconnect', { id: tabId });
+    setSshTabs(tabs => {
+      const next = tabs.filter(tab => tab.id !== tabId);
+      if (activeTabId === tabId) {
+        setActiveTabId(next.length ? next[next.length - 1].id : null);
+      }
+      return next;
+    });
+  };
+
+  const updateTab = (tabId: string, patch: Partial<SshTab>) => {
+    setSshTabs(tabs => tabs.map(tab => tab.id === tabId ? { ...tab, ...patch } : tab));
+  };
+
+  const activeTab = sshTabs.find(tab => tab.id === activeTabId) || null;
+  const hostStatus = (hostId: string) => {
+    const tabs = sshTabs.filter(tab => tab.hostId === hostId);
+    if (tabs.some(tab => tab.status === 'connected')) return 'connected';
+    if (tabs.some(tab => tab.status === 'connecting')) return 'connecting';
+    if (tabs.some(tab => tab.status === 'error')) return 'error';
+    if (tabs.some(tab => tab.status === 'closed')) return 'closed';
+    return 'idle';
+  };
+  const hostStatusClass = (status: string) => {
+    if (status === 'connected') return 'bg-green-500';
+    if (status === 'connecting') return 'bg-yellow-500';
+    if (status === 'error' || status === 'closed') return 'bg-red-500';
+    return 'bg-textMuted';
   };
 
   if (!session) {
+    if (route === '/') {
+      return <LandingPage onNavigate={navigate} />;
+    }
+
     return (
       <div className="flex h-screen w-screen bg-background text-textMain font-sans overflow-hidden items-center justify-center relative">
         {/* Decorative gradient blur background */}
@@ -389,7 +502,9 @@ function App() {
             </span>
             <button
               onClick={() => {
+                const nextPath = authMode === 'login' ? '/register' : '/login';
                 setAuthMode(authMode === 'login' ? 'register' : 'login');
+                navigate(nextPath);
                 setAuthError('');
                 setAuthNotice('');
                 setAuthPassword('');
@@ -410,12 +525,15 @@ function App() {
     <div className="flex h-screen w-screen bg-background text-textMain font-sans overflow-hidden">
       {/* Sidebar */}
       <div className="w-16 bg-surface border-r border-border flex flex-col items-center py-4 space-y-6 shrink-0 z-10">
-        <div className="p-2 bg-primary/10 text-primary rounded-xl cursor-pointer hover:bg-primary/20 transition">
+        <button onClick={() => navigate('/app')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="Terminals">
           <Terminal size={24} />
-        </div>
+        </button>
         <div className="p-2 text-textMuted hover:text-textMain cursor-pointer transition">
           <FolderGit2 size={24} />
         </div>
+        <button onClick={() => navigate('/app/keychain')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app/keychain' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="SSH Keys">
+          <KeyRound size={24} />
+        </button>
         {session.user.role === 'admin' && (
           <button
             onClick={openUsers}
@@ -444,107 +562,171 @@ function App() {
       </div>
 
       {/* Hosts List Panel */}
-      <div className="w-64 bg-[#161b22]/50 border-r border-border flex flex-col shrink-0 z-10">
-        <div className="h-14 border-b border-border flex items-center justify-between px-4 shrink-0">
-          <span className="font-semibold text-sm">Hosts</span>
-          <button onClick={() => setIsAddingHost(true)} className="p-1 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition">
+      <div
+        onMouseEnter={() => setIsHostSidebarHovered(true)}
+        onMouseLeave={() => setIsHostSidebarHovered(false)}
+        className={`${isHostSidebarExpanded ? 'w-72' : 'w-[72px]'} bg-[#161b22]/50 border-r border-border flex flex-col shrink-0 z-30 transition-[width] duration-200 ease-out`}
+      >
+        <div className={`h-14 border-b border-border flex items-center ${isHostSidebarExpanded ? 'justify-between px-3' : 'justify-center px-2'} gap-2 shrink-0`}>
+          {isHostSidebarExpanded && <span className="font-semibold text-sm truncate">Hosts</span>}
+          <button
+            onClick={() => setIsHostSidebarPinned(value => !value)}
+            title={isHostSidebarPinned ? 'Unpin host sidebar' : 'Pin host sidebar'}
+            aria-label={isHostSidebarPinned ? 'Unpin host sidebar' : 'Pin host sidebar'}
+            className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition"
+          >
+            {isHostSidebarPinned ? <Pin size={15} /> : <PinOff size={15} />}
+          </button>
+          <button onClick={() => setIsAddingHost(true)} title="Add host" aria-label="Add host" className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition">
             <Plus size={16} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className={`flex-1 overflow-y-auto ${isHostSidebarExpanded ? 'p-2' : 'px-2 py-2'} space-y-1 overflow-x-visible`}>
           {loadingHosts ? (
             <div className="p-4 flex flex-col items-center space-y-2 text-center text-xs text-textMuted">
               <Loader2 size={16} className="animate-spin text-primary" />
-              <span>Syncing hosts...</span>
+              {isHostSidebarExpanded && <span>Syncing hosts...</span>}
             </div>
           ) : hosts.length === 0 ? (
-            <div className="p-4 text-center text-xs text-textMuted">No hosts added yet.</div>
+            <div className="p-4 text-center text-xs text-textMuted">{isHostSidebarExpanded ? 'No hosts added yet.' : 'Empty'}</div>
           ) : (
-            hosts.map(h => (
+            hosts.map(h => {
+              const status = hostStatus(h.id);
+              const tooltipId = `host-tooltip-${h.id}`;
+              return (
               <div 
                 key={h.id} 
                 onClick={() => connectToHost(h)}
-                className={`flex items-center space-x-3 p-2 rounded-md cursor-pointer transition group ${activeHost?.id === h.id ? 'bg-primary/10' : 'hover:bg-white/5'}`}
+                title={`${h.name} - ${h.username}@${h.host}:${h.port}`}
+                aria-label={`Connect to ${h.name}, ${h.username} at ${h.host} port ${h.port}, ${h.authType || 'password'} authentication, ${status} status`}
+                aria-describedby={tooltipId}
+                className={`relative flex items-center ${isHostSidebarExpanded ? 'gap-3 p-2' : 'justify-center p-2'} rounded-md cursor-pointer transition group ${activeTab?.hostId === h.id ? 'bg-primary/10' : 'hover:bg-white/5'}`}
               >
-                <div className={`w-8 h-8 rounded flex items-center justify-center ${activeHost?.id === h.id ? 'bg-primary/20 text-primary' : 'bg-white/5 text-textMuted group-hover:text-white'}`}>
+                <div className={`relative w-9 h-9 rounded-md flex items-center justify-center shrink-0 ${activeTab?.hostId === h.id ? 'bg-primary/20 text-primary' : 'bg-white/5 text-textMuted group-hover:text-white'}`}>
                   <Server size={16} />
+                  <span className={`absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-[#161b22] ${hostStatusClass(status)}`} />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate text-white">{h.name}</div>
-                  <div className="text-xs text-textMuted truncate">{h.username}@{h.host}</div>
-                </div>
-                <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-1">
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`Are you sure you want to delete ${h.name}?`)) {
-                        handleDeleteHost(h.id);
-                      }
-                    }} 
-                    className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-red-400 transition"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                  <div className="p-1 hover:bg-white/10 rounded">
-                    <Play size={12} className="text-primary" />
+                {isHostSidebarExpanded && (
+                  <>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate text-white">{h.name}</div>
+                      <div className="text-xs text-textMuted truncate">{h.username}@{h.host}</div>
+                      <div className="text-[10px] text-textMuted truncate capitalize">{status}</div>
+                    </div>
+                    <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-1 shrink-0">
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Are you sure you want to delete ${h.name}?`)) {
+                            handleDeleteHost(h.id);
+                          }
+                        }} 
+                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-red-400 transition"
+                        title="Delete host"
+                        aria-label={`Delete ${h.name}`}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                      <div className="p-1 hover:bg-white/10 rounded" title="Open SSH tab">
+                        <Play size={12} className="text-primary" />
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div
+                  id={tooltipId}
+                  role="tooltip"
+                  className="pointer-events-none absolute left-2 right-2 top-[calc(100%+6px)] rounded-md border border-border bg-surface px-3 py-2 text-xs shadow-2xl opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition z-50"
+                >
+                  <div className="font-semibold text-white truncate">{h.name}</div>
+                  <div className="mt-1 grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-1 text-textMuted">
+                    <span>Host</span><span className="truncate text-textMain">{h.host}</span>
+                    <span>User</span><span className="truncate text-textMain">{h.username}</span>
+                    <span>Port</span><span className="text-textMain">{h.port}</span>
+                    <span>Auth</span><span className="truncate text-textMain">{h.authType || 'password'}</span>
+                    <span>Status</span><span className="capitalize text-textMain">{status}</span>
                   </div>
                 </div>
               </div>
-            ))
+            )})
           )}
         </div>
       </div>
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col bg-background relative h-full min-w-0">
-        {activeHost ? (
+        {route === '/app/keychain' ? (
+          <KeychainPanel />
+        ) : activeTab ? (
           <>
-            <div className="h-14 border-b border-border flex items-center px-4 shrink-0 justify-between bg-surface/50">
-              <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 rounded-full ${status === 'connected' ? 'bg-green-500' : status === 'error' ? 'bg-red-500' : 'bg-yellow-500'}`}></div>
-                <span className="text-sm font-medium text-white">{activeHost.name}</span>
-                <span className="text-xs text-textMuted ml-2">({activeHost.host})</span>
-              </div>
-              <button 
-                onClick={() => {
-                  window.ipcRenderer?.send('ssh-disconnect', { id: activeHost.id });
-                  setActiveHost(null);
-                  setStatus('idle');
-                }}
-                className="px-3 py-1 bg-white/5 hover:bg-red-500/20 hover:text-red-400 text-xs rounded transition text-textMuted"
-              >
-                Disconnect
-              </button>
+            <div className="h-12 border-b border-border flex items-center bg-surface/50 overflow-x-auto shrink-0">
+              {sshTabs.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTabId(tab.id)}
+                  className={`h-full min-w-[180px] max-w-[240px] border-r border-border px-3 flex items-center gap-2 text-left ${activeTabId === tab.id ? 'bg-background text-white' : 'text-textMuted hover:bg-white/5'}`}
+                >
+                  <div className={`w-2 h-2 rounded-full shrink-0 ${tab.status === 'connected' ? 'bg-green-500' : tab.status === 'error' || tab.status === 'closed' ? 'bg-red-500' : 'bg-yellow-500'}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium truncate">{tab.name}</div>
+                    <div className="text-[10px] text-textMuted truncate">{tab.hostname}</div>
+                  </div>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        closeTab(tab.id);
+                      }
+                    }}
+                    className="p-1 rounded hover:bg-red-500/20 hover:text-red-300"
+                  >
+                    <X size={14} />
+                  </span>
+                </button>
+              ))}
+              <div className="flex-1" />
+              <div className="px-4 text-xs text-textMuted whitespace-nowrap">{activeTab.status}</div>
             </div>
 
-            <div className="flex-1 relative bg-black">
-              {status === 'connecting' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10 flex-col space-y-3">
-                  <Loader2 size={32} className="text-primary animate-spin" />
-                  <span className="text-sm text-textMuted">Connecting to {activeHost.host}...</span>
-                </div>
-              )}
-              {status === 'error' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-background z-10 flex-col space-y-3">
-                  <div className="p-4 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg max-w-md text-center">
-                    <h3 className="font-semibold mb-2">Connection Failed</h3>
-                    <p className="text-sm opacity-80">{errorMsg}</p>
-                  </div>
-                </div>
-              )}
+            <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_360px]">
+              <div className="relative bg-black min-w-0">
+                {sshTabs.map(tab => (
+                  <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
+                    {tab.status === 'connecting' && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10 flex-col space-y-3">
+                        <Loader2 size={32} className="text-primary animate-spin" />
+                        <span className="text-sm text-textMuted">Connecting to {tab.hostname}...</span>
+                      </div>
+                    )}
+                    {(tab.status === 'error' || tab.status === 'closed') && tab.errorMsg && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-background z-10 flex-col space-y-3">
+                        <div className="p-4 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg max-w-md text-center">
+                          <h3 className="font-semibold mb-2">Connection Failed</h3>
+                          <p className="text-sm opacity-80">{tab.errorMsg}</p>
+                        </div>
+                      </div>
+                    )}
 
-              <TerminalView
-                hostId={activeHost.id}
-                onConnected={() => setStatus('connected')}
-                onError={(message) => {
-                  setStatus('error');
-                  setErrorMsg(message);
-                }}
-                onClosed={() => {
-                  setStatus('error');
-                  setErrorMsg('SSH connection closed. Reconnect from the host list to open a new shell.');
-                }}
-              />
+                    <TerminalView
+                      sessionId={tab.id}
+                      hostId={tab.hostId}
+                      host={tab.host}
+                      active={activeTabId === tab.id}
+                      onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '' })}
+                      onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message })}
+                      onClosed={() => updateTab(tab.id, { status: 'closed', errorMsg: 'SSH connection closed. Reconnect from the host list to open a new shell.' })}
+                    />
+                  </div>
+                ))}
+              </div>
+              <SftpFileManager sessionId={activeTab.id} hostId={activeTab.hostId} />
             </div>
           </>
         ) : (
@@ -588,8 +770,26 @@ function App() {
                 <input value={fUser} onChange={e=>setFUser(e.target.value)} required type="text" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition" />
               </div>
               <div>
+                <label className="block text-xs text-textMuted mb-1">Authentication</label>
+                <select value={fAuthType} onChange={e => setFAuthType(e.target.value as any)} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
+                  <option value="password">Password</option>
+                  <option value="credential">Keychain credential</option>
+                </select>
+              </div>
+              {fAuthType === 'credential' && (
+                <div>
+                  <label className="block text-xs text-textMuted mb-1">Credential</label>
+                  <select value={fCredentialId} onChange={e => setFCredentialId(e.target.value)} required className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
+                    <option value="">Select credential</option>
+                    {credentials.map(credential => (
+                      <option key={credential.id} value={credential.id}>{credential.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
                 <label className="block text-xs text-textMuted mb-1">Password</label>
-                <input value={fPass} onChange={e=>setFPass(e.target.value)} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition" placeholder="Leave empty if using key" />
+                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Leave empty if using keychain credential" />
               </div>
 
               <div className="pt-4 flex justify-end space-x-3">
