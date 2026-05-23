@@ -71,6 +71,9 @@ function hostPayload(body) {
   const password = typeof body.password === 'string' ? body.password : '';
   const authType = ['password', 'private_key', 'credential', 'identity', 'agent', 'manual', 'one_time'].includes(body.authType) ? body.authType : 'password';
   const credentialId = typeof body.credentialId === 'string' && body.credentialId ? body.credentialId : null;
+  const startupDirectory = String(body.startupDirectory || '').trim() || null;
+  const notes = String(body.notes || '').trim() || null;
+  const tags = String(body.tags || '').trim() || null;
 
   if (!host || !username || !name) {
     throw Object.assign(new Error('Host, name, and username are required'), { status: 400 });
@@ -79,7 +82,7 @@ function hostPayload(body) {
     throw Object.assign(new Error('Port must be between 1 and 65535'), { status: 400 });
   }
 
-  return { host, username, name, port, password, authType, credentialId };
+  return { host, username, name, port, password, authType, credentialId, startupDirectory, notes, tags };
 }
 
 function publicUser(user) {
@@ -246,7 +249,8 @@ async function listHosts(req, res) {
   if (!user) return;
 
   const [hosts] = await pool.execute(
-    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId
+    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
+            startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
        FROM hosts
       WHERE user_id = ?
       ORDER BY created_at ASC`,
@@ -255,30 +259,100 @@ async function listHosts(req, res) {
   json(res, 200, { hosts });
 }
 
+async function ensureUserCredential(userId, credentialId) {
+  if (!credentialId) return;
+  const [rows] = await pool.execute(
+    'SELECT id FROM ssh_credentials WHERE id = ? AND user_id = ? LIMIT 1',
+    [credentialId, userId]
+  );
+  if (!rows[0]) throw Object.assign(new Error('Selected identity was not found'), { status: 400 });
+}
+
+async function createPasswordIdentityForHost(user, host) {
+  const credentialId = randomUUID();
+  const storageRef = saveCredentialSecret(credentialId, { type: 'password', password: host.password });
+  await pool.execute(
+    `INSERT INTO ssh_credentials (id, user_id, type, label, username, storage_ref)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [credentialId, user.id, 'password', `${host.name} password`, host.username, storageRef]
+  );
+  return credentialId;
+}
+
 async function createHost(req, res) {
   const user = await requireUser(req, res);
   if (!user) return;
 
   const host = { id: randomUUID(), ...hostPayload(await readJson(req)) };
   if (host.authType === 'password' && host.password) {
-    const credentialId = randomUUID();
-    const storageRef = saveCredentialSecret(credentialId, { type: 'password', password: host.password });
-    await pool.execute(
-      `INSERT INTO ssh_credentials (id, user_id, type, label, username, storage_ref)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [credentialId, user.id, 'password', `${host.name} password`, host.username, storageRef]
-    );
+    const credentialId = await createPasswordIdentityForHost(user, host);
     host.authType = 'credential';
     host.credentialId = credentialId;
     host.password = '';
   }
+  await ensureUserCredential(user.id, host.credentialId);
 
   await pool.execute(
-    `INSERT INTO hosts (id, user_id, name, host, port, username, auth_type, credential_id, password)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [host.id, user.id, host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.password]
+    `INSERT INTO hosts
+      (id, user_id, name, host, port, username, auth_type, credential_id, startup_directory, notes, tags, password)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [host.id, user.id, host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags, host.password]
   );
   json(res, 201, { host });
+}
+
+async function updateHost(req, res, id) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const [existingRows] = await pool.execute(
+    `SELECT id, credential_id
+       FROM hosts
+      WHERE id = ? AND user_id = ?
+      LIMIT 1`,
+    [id, user.id]
+  );
+  if (!existingRows[0]) throw Object.assign(new Error('Host not found'), { status: 404 });
+
+  const body = await readJson(req);
+  const host = hostPayload(body);
+  if (host.authType === 'password' && host.password) {
+    host.credentialId = await createPasswordIdentityForHost(user, host);
+    host.authType = 'credential';
+    host.password = '';
+  } else if (host.authType === 'password' && !body.removeCredential) {
+    host.credentialId = existingRows[0].credential_id || null;
+    host.authType = host.credentialId ? 'credential' : 'password';
+  } else if (body.removeCredential) {
+    host.credentialId = null;
+  }
+
+  await ensureUserCredential(user.id, host.credentialId);
+  await pool.execute(
+    `UPDATE hosts
+        SET name = ?,
+            host = ?,
+            port = ?,
+            username = ?,
+            auth_type = ?,
+            credential_id = ?,
+            startup_directory = ?,
+            notes = ?,
+            tags = ?,
+            password = ''
+      WHERE id = ? AND user_id = ?`,
+    [host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags, id, user.id]
+  );
+
+  const [rows] = await pool.execute(
+    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
+            startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
+       FROM hosts
+      WHERE id = ? AND user_id = ?
+      LIMIT 1`,
+    [id, user.id]
+  );
+  json(res, 200, { host: rows[0] });
 }
 
 function publicCredential(row) {
@@ -560,6 +634,9 @@ async function route(req, res) {
   if (req.method === 'GET' && url.pathname === '/api/admin/users') return listUsers(req, res);
 
   const hostId = url.pathname.match(/^\/api\/hosts\/([^/]+)$/);
+  if (req.method === 'PUT' && hostId) {
+    return updateHost(req, res, decodeURIComponent(hostId[1]));
+  }
   if (req.method === 'DELETE' && hostId) {
     return deleteHost(req, res, decodeURIComponent(hostId[1]));
   }

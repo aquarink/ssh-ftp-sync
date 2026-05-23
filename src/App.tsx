@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff } from 'lucide-react';
+import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy } from 'lucide-react';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
@@ -29,6 +29,8 @@ function App() {
   const [sshTabs, setSshTabs] = useState<SshTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [isAddingHost, setIsAddingHost] = useState(false);
+  const [editingHost, setEditingHost] = useState<Host | null>(null);
+  const [removeSavedCredential, setRemoveSavedCredential] = useState(false);
   const [isHostSidebarHovered, setIsHostSidebarHovered] = useState(false);
   const [isHostSidebarPinned, setIsHostSidebarPinned] = useState(() => localStorage.getItem('hostSidebarPinned') === 'true');
 
@@ -60,6 +62,9 @@ function App() {
   const [fPass, setFPass] = useState('');
   const [fAuthType, setFAuthType] = useState<'password' | 'identity' | 'one_time'>('password');
   const [fCredentialId, setFCredentialId] = useState('');
+  const [fStartupDirectory, setFStartupDirectory] = useState('');
+  const [fNotes, setFNotes] = useState('');
+  const [fTags, setFTags] = useState('');
 
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
@@ -240,7 +245,64 @@ function App() {
     navigate('/');
   };
 
-  const handleAddHost = async (e: React.FormEvent) => {
+  const resetHostForm = () => {
+    setFName('');
+    setFHost('');
+    setFPort('22');
+    setFUser('root');
+    setFPass('');
+    setFAuthType('password');
+    setFCredentialId('');
+    setFStartupDirectory('');
+    setFNotes('');
+    setFTags('');
+    setRemoveSavedCredential(false);
+    setEditingHost(null);
+  };
+
+  const openAddHost = () => {
+    resetHostForm();
+    setIsAddingHost(true);
+  };
+
+  const openEditHost = (host: Host) => {
+    setEditingHost(host);
+    setFName(host.name || '');
+    setFHost(host.host || '');
+    setFPort(String(host.port || 22));
+    setFUser(host.username || 'root');
+    setFPass('');
+    setFAuthType(host.credentialId ? 'identity' : 'password');
+    setFCredentialId(host.credentialId || '');
+    setFStartupDirectory(host.startupDirectory || '');
+    setFNotes(host.notes || '');
+    setFTags(host.tags || '');
+    setRemoveSavedCredential(false);
+    setIsAddingHost(true);
+  };
+
+  const openDuplicateHost = (host: Host) => {
+    setEditingHost(null);
+    setFName(`${host.name} Copy`);
+    setFHost(host.host || '');
+    setFPort(String(host.port || 22));
+    setFUser(host.username || 'root');
+    setFPass('');
+    setFAuthType(host.credentialId ? 'identity' : 'password');
+    setFCredentialId(host.credentialId || '');
+    setFStartupDirectory(host.startupDirectory || '');
+    setFNotes(host.notes || '');
+    setFTags(host.tags || '');
+    setRemoveSavedCredential(false);
+    setIsAddingHost(true);
+  };
+
+  const closeHostModal = () => {
+    setIsAddingHost(false);
+    resetHostForm();
+  };
+
+  const handleHostSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!session) return;
 
@@ -274,14 +336,22 @@ function App() {
         password: '',
         authType,
         credentialId: credentialId || null,
+        startupDirectory: fStartupDirectory || null,
+        notes: fNotes || null,
+        tags: fTags || null,
+        removeCredential: removeSavedCredential,
       };
-      const { host } = await api.createHost(newHostData);
-      setHosts([...hosts, host]);
+      const { host } = editingHost
+        ? await api.updateHost(editingHost.id, newHostData)
+        : await api.createHost(newHostData);
+
+      setHosts(current => editingHost
+        ? current.map(item => item.id === host.id ? host : item)
+        : [...current, host]
+      );
       fetchCredentials();
 
-      setIsAddingHost(false);
-      // reset form
-      setFName(''); setFHost(''); setFPort('22'); setFUser('root'); setFPass(''); setFAuthType('password'); setFCredentialId('');
+      closeHostModal();
     } catch (err: any) {
       alert('Error saving host: ' + err.message);
     }
@@ -568,7 +638,7 @@ function App() {
           >
             {isHostSidebarPinned ? <Pin size={15} /> : <PinOff size={15} />}
           </button>
-          <button onClick={() => setIsAddingHost(true)} title="Add host" aria-label="Add host" className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition">
+          <button onClick={openAddHost} title="Add host" aria-label="Add host" className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition">
             <Plus size={16} />
           </button>
         </div>
@@ -605,6 +675,39 @@ function App() {
                       <div className="text-[10px] text-textMuted truncate capitalize">{status}</div>
                     </div>
                     <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-1 shrink-0">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          connectToHost(h);
+                        }}
+                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-primary transition"
+                        title="Connect"
+                        aria-label={`Connect to ${h.name}`}
+                      >
+                        <Play size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditHost(h);
+                        }}
+                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-white transition"
+                        title="Edit host"
+                        aria-label={`Edit ${h.name}`}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDuplicateHost(h);
+                        }}
+                        className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-white transition"
+                        title="Duplicate host"
+                        aria-label={`Duplicate ${h.name}`}
+                      >
+                        <Copy size={12} />
+                      </button>
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
@@ -618,9 +721,6 @@ function App() {
                       >
                         <Trash2 size={12} />
                       </button>
-                      <div className="p-1 hover:bg-white/10 rounded" title="Open SSH tab">
-                        <Play size={12} className="text-primary" />
-                      </div>
                     </div>
                   </>
                 )}
@@ -724,7 +824,7 @@ function App() {
           <div className="flex-1 flex items-center justify-center flex-col space-y-4">
             <Terminal size={48} className="text-border" />
             <h2 className="text-xl font-semibold text-textMuted">Select a host to connect</h2>
-            <button onClick={() => setIsAddingHost(true)} className="px-4 py-2 bg-primary text-background font-medium rounded-md hover:bg-primary/90 transition text-sm">
+            <button onClick={openAddHost} className="px-4 py-2 bg-primary text-background font-medium rounded-md hover:bg-primary/90 transition text-sm">
               Add New Server
             </button>
           </div>
@@ -734,14 +834,19 @@ function App() {
       {/* Add Host Modal */}
       {isAddingHost && (
         <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center">
-          <div className="bg-surface border border-border rounded-xl w-[400px] shadow-2xl flex flex-col">
+          <div className="bg-surface border border-border rounded-xl w-[min(520px,calc(100vw-32px))] max-h-[min(820px,calc(100vh-32px))] shadow-2xl flex flex-col">
             <div className="px-6 py-4 border-b border-border flex justify-between items-center">
-              <h3 className="font-semibold text-white">Add New Host</h3>
-              <button onClick={() => setIsAddingHost(false)} className="text-textMuted hover:text-white transition">
+              <h3 className="font-semibold text-white">{editingHost ? 'Edit Host' : 'Add New Host'}</h3>
+              <button onClick={closeHostModal} className="text-textMuted hover:text-white transition">
                 <X size={18} />
               </button>
             </div>
-            <form onSubmit={handleAddHost} className="p-6 space-y-4">
+            <form onSubmit={handleHostSubmit} className="p-6 space-y-4 overflow-auto">
+              {editingHost && (
+                <div className="p-3 bg-primary/10 text-primary border border-primary/20 rounded text-xs leading-5">
+                  Changes apply to new connections. Active SSH tabs keep their current session until reconnect.
+                </div>
+              )}
               <div>
                 <label className="block text-xs text-textMuted mb-1">Display Name (Optional)</label>
                 <input value={fName} onChange={e=>setFName(e.target.value)} type="text" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition" placeholder="My Server" />
@@ -784,14 +889,39 @@ function App() {
                   One-time key is intentionally not saved with the host. Save the host first, then use a saved identity or connect with a transient identity flow.
                 </div>
               )}
+              {editingHost && (
+                <div className="p-3 bg-white/5 border border-border rounded text-xs text-textMuted leading-5">
+                  {editingHost.credentialId && !removeSavedCredential
+                    ? `Using identity: ${credentials.find(item => item.id === editingHost.credentialId)?.label || 'saved identity'}`
+                    : 'No credential selected'}
+                </div>
+              )}
               <div>
-                <label className="block text-xs text-textMuted mb-1">Password</label>
-                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Leave empty if using identity" />
+                <label className="block text-xs text-textMuted mb-1">{editingHost ? 'New password' : 'Password'}</label>
+                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder={editingHost ? 'Leave empty to keep saved credential' : 'Leave empty if using identity'} />
+              </div>
+              {editingHost?.credentialId && (
+                <label className="flex items-center gap-2 text-xs text-textMuted">
+                  <input type="checkbox" checked={removeSavedCredential} onChange={event => setRemoveSavedCredential(event.target.checked)} />
+                  <span>Remove saved credential from this host</span>
+                </label>
+              )}
+              <div>
+                <label className="block text-xs text-textMuted mb-1">Startup directory</label>
+                <input value={fStartupDirectory} onChange={e => setFStartupDirectory(e.target.value)} type="text" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition" placeholder="/var/www" />
+              </div>
+              <div>
+                <label className="block text-xs text-textMuted mb-1">Tags / Group</label>
+                <input value={fTags} onChange={e => setFTags(e.target.value)} type="text" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition" placeholder="production, web" />
+              </div>
+              <div>
+                <label className="block text-xs text-textMuted mb-1">Notes</label>
+                <textarea value={fNotes} onChange={e => setFNotes(e.target.value)} className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition resize-none" placeholder="Optional notes" />
               </div>
 
               <div className="pt-4 flex justify-end space-x-3">
-                <button type="button" onClick={() => setIsAddingHost(false)} className="px-4 py-2 text-sm text-textMuted hover:text-white transition">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-primary text-background text-sm font-medium rounded-md hover:bg-primary/90 transition">Save Host</button>
+                <button type="button" onClick={closeHostModal} className="px-4 py-2 text-sm text-textMuted hover:text-white transition">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-primary text-background text-sm font-medium rounded-md hover:bg-primary/90 transition">{editingHost ? 'Save Changes' : 'Save Host'}</button>
               </div>
             </form>
           </div>

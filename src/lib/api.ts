@@ -19,6 +19,10 @@ export interface Host {
   password?: string;
   authType?: 'password' | 'private_key' | 'credential' | 'identity' | 'agent' | 'manual' | 'one_time';
   credentialId?: string | null;
+  startupDirectory?: string | null;
+  notes?: string | null;
+  tags?: string | null;
+  updatedAt?: string;
 }
 
 export interface ManagedUser extends User {
@@ -119,6 +123,11 @@ export const api = {
   createHost: (host: Omit<Host, 'id'>) =>
     request<{ host: Host }>('/api/hosts', {
       method: 'POST',
+      body: JSON.stringify(host),
+    }),
+  updateHost: (id: string, host: Partial<Omit<Host, 'id'>> & { removeCredential?: boolean }) =>
+    request<{ host: Host }>(`/api/hosts/${encodeURIComponent(id)}`, {
+      method: 'PUT',
       body: JSON.stringify(host),
     }),
   deleteHost: (id: string) =>

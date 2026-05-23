@@ -17,6 +17,7 @@ dist
 dist-ssr
 dist-electron
 *.local
+.credential-vault/
 
 # Editor directories and files
 .vscode/*
