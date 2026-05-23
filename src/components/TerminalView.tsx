@@ -14,6 +14,7 @@ interface TerminalViewProps {
     credentialId?: string | null;
   };
   active: boolean;
+  fontSize: number;
   onConnected?: () => void;
   onError?: (message: string) => void;
   onClosed?: () => void;
@@ -30,7 +31,7 @@ function sshSocketUrl(hostId: string, sessionId: string) {
   return `${protocol}//${window.location.host}/api/ssh?hostId=${encodeURIComponent(hostId)}&sessionId=${encodeURIComponent(sessionId)}`;
 }
 
-export function TerminalView({ sessionId, hostId, host, active, onConnected, onError, onClosed }: TerminalViewProps) {
+export function TerminalView({ sessionId, hostId, host, active, fontSize, onConnected, onError, onClosed }: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
@@ -60,6 +61,7 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
         yellow: '#d29922',
       },
       fontFamily: '"Fira Code", "JetBrains Mono", monospace',
+      fontSize,
     });
 
     fitAddon.current = new FitAddon();
@@ -120,16 +122,16 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
 
     // Listen to resize
     const handleResize = () => {
-      if (fitAddon.current && term.current && window.ipcRenderer) {
-        fitAddon.current.fit();
+      if (!fitAddon.current || !term.current) return;
+      fitAddon.current.fit();
+      if (window.ipcRenderer) {
         window.ipcRenderer.send('ssh-resize', { 
           id: sessionId, 
           cols: term.current.cols, 
           rows: term.current.rows 
         });
       }
-      if (fitAddon.current && term.current && socket?.readyState === WebSocket.OPEN) {
-        fitAddon.current.fit();
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({
           type: 'resize',
           cols: term.current.cols,
@@ -187,6 +189,24 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
       });
     }
   }, [active, sessionId]);
+
+  useEffect(() => {
+    if (!term.current) return;
+    term.current.options.fontSize = fontSize;
+    if (!active || !fitAddon.current) return;
+
+    requestAnimationFrame(() => {
+      if (!term.current || !fitAddon.current) return;
+      fitAddon.current.fit();
+      if (window.ipcRenderer) {
+        window.ipcRenderer.send('ssh-resize', {
+          id: sessionId,
+          cols: term.current.cols,
+          rows: term.current.rows,
+        });
+      }
+    });
+  }, [fontSize, active, sessionId]);
 
   return <div ref={terminalRef} className="w-full h-full p-2" />;
 }

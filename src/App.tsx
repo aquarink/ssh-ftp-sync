@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder } from 'lucide-react';
+import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
@@ -17,6 +17,10 @@ interface SshTab {
   status: SshTabStatus;
   errorMsg?: string;
 }
+
+const DEFAULT_TERMINAL_FONT_SIZE = 14;
+const MIN_TERMINAL_FONT_SIZE = 8;
+const MAX_TERMINAL_FONT_SIZE = 40;
 
 function App() {
   const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
@@ -63,6 +67,11 @@ function App() {
   const [ftpScrollPosition, setFtpScrollPosition] = useState(() => {
     const val = localStorage.getItem('ftpScrollPosition');
     return val ? parseInt(val, 10) || 0 : 0;
+  });
+  const [terminalFontSize, setTerminalFontSize] = useState(() => {
+    const val = localStorage.getItem('terminalFontSize');
+    const parsed = val ? parseInt(val, 10) : DEFAULT_TERMINAL_FONT_SIZE;
+    return Number.isFinite(parsed) ? Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, parsed)) : DEFAULT_TERMINAL_FONT_SIZE;
   });
 
   // Auth states
@@ -120,6 +129,10 @@ function App() {
     localStorage.setItem('ftpScrollPosition', String(ftpScrollPosition));
   }, [ftpScrollPosition]);
 
+  useEffect(() => {
+    localStorage.setItem('terminalFontSize', String(terminalFontSize));
+  }, [terminalFontSize]);
+
   // Extract all unique tags from hosts
   const allTags = useMemo(() => {
     const tagsSet = new Set<string>();
@@ -147,6 +160,11 @@ function App() {
       return matchSearch && matchTag;
     });
   }, [hosts, hostSearchQuery, selectedTag]);
+
+  const clampTerminalFontSize = (value: number) => Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, value));
+  const zoomInTerminal = () => setTerminalFontSize(value => clampTerminalFontSize(value + 1));
+  const zoomOutTerminal = () => setTerminalFontSize(value => clampTerminalFontSize(value - 1));
+  const resetTerminalZoom = () => setTerminalFontSize(DEFAULT_TERMINAL_FONT_SIZE);
 
   // Mouse drag handlers for resizing panels
   const startLeftResize = (e: React.MouseEvent) => {
@@ -216,6 +234,41 @@ function App() {
     if (route === '/register') setAuthMode('register');
     if (route === '/login') setAuthMode('login');
   }, [session, route]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!session || !activeTabId || route !== '/app') return;
+      const target = event.target as HTMLElement | null;
+      if (target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      )) {
+        return;
+      }
+
+      const modifierPressed = event.metaKey || event.ctrlKey;
+      if (!modifierPressed) return;
+
+      const key = event.key;
+      const isZoomIn = key === '=' || key === '+';
+      const isZoomOut = key === '-' || key === '_';
+      const isReset = key === '0';
+
+      if (!isZoomIn && !isZoomOut && !isReset) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (isZoomIn) zoomInTerminal();
+      if (isZoomOut) zoomOutTerminal();
+      if (isReset) resetTerminalZoom();
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [activeTabId, route, session]);
 
   useEffect(() => {
     if (!turnstileSiteKey || session || !['/login', '/register'].includes(route)) return;
@@ -977,7 +1030,35 @@ function App() {
                 </button>
               ))}
               <div className="flex-1" />
-              <div className="px-4 text-xs text-textMuted whitespace-nowrap">{activeTab.status}</div>
+              <div className="flex items-center gap-3 px-3 shrink-0">
+                <div className="text-xs text-textMuted whitespace-nowrap">{activeTab.status}</div>
+                <div className="flex items-center gap-1 rounded-md border border-border bg-background/60 px-1.5 py-1">
+                  <button
+                    onClick={zoomOutTerminal}
+                    title="Zoom out terminal"
+                    className="p-1 rounded hover:bg-white/10 text-textMuted hover:text-white transition cursor-pointer"
+                  >
+                    <ZoomOut size={14} />
+                  </button>
+                  <div className="min-w-[52px] text-center text-[10px] font-mono text-textMuted">
+                    {terminalFontSize}px
+                  </div>
+                  <button
+                    onClick={zoomInTerminal}
+                    title="Zoom in terminal"
+                    className="p-1 rounded hover:bg-white/10 text-textMuted hover:text-white transition cursor-pointer"
+                  >
+                    <ZoomIn size={14} />
+                  </button>
+                  <button
+                    onClick={resetTerminalZoom}
+                    title="Reset terminal zoom"
+                    className="p-1 rounded hover:bg-white/10 text-textMuted hover:text-white transition cursor-pointer"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="flex-1 min-h-0 flex relative overflow-hidden">
@@ -1005,6 +1086,7 @@ function App() {
                       hostId={tab.hostId}
                       host={tab.host}
                       active={activeTabId === tab.id}
+                      fontSize={terminalFontSize}
                       onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '' })}
                       onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message })}
                       onClosed={() => updateTab(tab.id, { status: 'closed', errorMsg: 'SSH connection closed. Reconnect from the host list to open a new shell.' })}
