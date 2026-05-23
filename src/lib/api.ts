@@ -92,7 +92,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || 'Request failed');
+    const detail = payload.details ? ` (${payload.details})` : '';
+    const message = payload.error?.message || payload.error || payload.message || `Request failed with status ${response.status}`;
+    throw new Error(`${message}${detail}`);
   }
 
   return payload as T;
@@ -161,7 +163,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   assignIdentityToHost: (hostId: string, identityId: string | null) =>
-    request<{ ok: true }>(`/api/hosts/${encodeURIComponent(hostId)}/identity`, {
+    request<{ host: Host }>(`/api/hosts/${encodeURIComponent(hostId)}/identity`, {
       method: 'PUT',
       body: JSON.stringify({ identityId }),
     }),

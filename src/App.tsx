@@ -747,7 +747,7 @@ function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col bg-background relative h-full min-w-0">
         {route === '/app/keychain' ? (
-          <KeychainPanel />
+          <KeychainPanel onHostUpdated={(host) => setHosts(current => current.map(item => item.id === host.id ? host : item))} />
         ) : activeTab ? (
           <>
             <div className="h-12 border-b border-border flex items-center bg-surface/50 overflow-x-auto shrink-0">

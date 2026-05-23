@@ -26,7 +26,11 @@ function sshBlobFingerprint(value: string): Promise<string> {
   }
 }
 
-export function KeychainPanel() {
+interface KeychainPanelProps {
+  onHostUpdated?: (host: Host) => void;
+}
+
+export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
   const [identities, setIdentities] = useState<SshIdentity[]>([]);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [hostAssignments, setHostAssignments] = useState<Record<string, string>>({});
@@ -164,9 +168,11 @@ export function KeychainPanel() {
     if (!hostId) return;
     setError('');
     try {
-      await api.assignIdentityToHost(hostId, identityId);
+      const { host } = await api.assignIdentityToHost(hostId, identityId);
+      setHosts(current => current.map(item => item.id === host.id ? host : item));
+      onHostUpdated?.(host);
       await loadIdentities();
-      alert('Identity assigned to host.');
+      alert('Identity assigned to host. Changes apply to new connections. Active SSH tabs keep their current session until reconnect.');
     } catch (err: any) {
       setError(err.message || 'Unable to assign identity');
     }

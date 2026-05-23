@@ -499,15 +499,28 @@ async function assignIdentityToHost(req, res, hostId) {
   if (!user) return;
   const body = await readJson(req);
   const identityId = typeof body.identityId === 'string' && body.identityId ? body.identityId : null;
+  const [hosts] = await pool.execute(
+    'SELECT id FROM hosts WHERE id = ? AND user_id = ? LIMIT 1',
+    [hostId, user.id]
+  );
+  if (!hosts[0]) throw Object.assign(new Error('Host not found'), { status: 404 });
   if (identityId) {
     const [identities] = await pool.execute('SELECT id FROM ssh_credentials WHERE id = ? AND user_id = ? LIMIT 1', [identityId, user.id]);
     if (!identities[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
   }
   await pool.execute(
-    'UPDATE hosts SET auth_type = ?, credential_id = ? WHERE id = ? AND user_id = ?',
+    'UPDATE hosts SET auth_type = ?, credential_id = ?, password = \'\' WHERE id = ? AND user_id = ?',
     [identityId ? 'identity' : 'password', identityId, hostId, user.id]
   );
-  json(res, 200, { ok: true });
+  const [updated] = await pool.execute(
+    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
+            startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
+       FROM hosts
+      WHERE id = ? AND user_id = ?
+      LIMIT 1`,
+    [hostId, user.id]
+  );
+  json(res, 200, { host: updated[0] });
 }
 
 function testSshConnection(config) {
@@ -669,8 +682,14 @@ async function route(req, res) {
 const server = http.createServer((req, res) => {
   route(req, res).catch((error) => {
     if (!error.status || error.status >= 500) console.error(error);
-    json(res, error.status || 500, {
+    const payload = {
       error: error.status ? error.message : 'Internal server error',
+    };
+    if (!error.status && (error.code || error.sqlMessage)) {
+      payload.details = error.code || error.sqlMessage;
+    }
+    json(res, error.status || 500, {
+      ...payload,
     });
   });
 });
