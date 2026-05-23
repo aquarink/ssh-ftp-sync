@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, FolderGit2, Settings, Plus, Server, X, Play, Loader2, LogOut, User, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff } from 'lucide-react';
+import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff } from 'lucide-react';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
@@ -528,9 +528,6 @@ function App() {
         <button onClick={() => navigate('/app')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="Terminals">
           <Terminal size={24} />
         </button>
-        <div className="p-2 text-textMuted hover:text-textMain cursor-pointer transition">
-          <FolderGit2 size={24} />
-        </div>
         <button onClick={() => navigate('/app/keychain')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app/keychain' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="SSH Keys">
           <KeyRound size={24} />
         </button>
@@ -549,12 +546,6 @@ function App() {
         </div>
         {/* User profile & Sign out */}
         <div className="border-t border-border pt-4 w-full flex flex-col items-center space-y-4">
-          <div className="p-2 text-textMuted hover:text-textMain cursor-pointer transition relative group" title={session.user?.email || ''}>
-            <User size={20} />
-            <div className="absolute left-16 bottom-2 bg-surface border border-border px-2 py-1 rounded text-xs text-white opacity-0 group-hover:opacity-100 transition whitespace-nowrap pointer-events-none z-50">
-              {session.user?.email || ''}
-            </div>
-          </div>
           <div onClick={handleLogout} className="p-2 text-textMuted hover:text-red-400 cursor-pointer transition" title="Log Out">
             <LogOut size={20} />
           </div>
