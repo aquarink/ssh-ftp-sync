@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy } from 'lucide-react';
+import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder } from 'lucide-react';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
@@ -32,6 +32,10 @@ function App() {
   const [editingHost, setEditingHost] = useState<Host | null>(null);
   const [removeSavedCredential, setRemoveSavedCredential] = useState(false);
   const [isHostSidebarHovered, setIsHostSidebarHovered] = useState(false);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(() => {
+    const val = localStorage.getItem('leftSidebarCollapsed');
+    return val !== null ? val === 'true' : false;
+  });
   const [leftSidebarPinned, setLeftSidebarPinned] = useState(() => {
     const val = localStorage.getItem('leftSidebarPinned');
     return val !== null ? val === 'true' : true;
@@ -56,6 +60,10 @@ function App() {
 
   const [hostSearchQuery, setHostSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [ftpScrollPosition, setFtpScrollPosition] = useState(() => {
+    const val = localStorage.getItem('ftpScrollPosition');
+    return val ? parseInt(val, 10) || 0 : 0;
+  });
 
   // Auth states
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -94,19 +102,23 @@ function App() {
     setRoute(path);
   };
 
-  const isHostSidebarExpanded = leftSidebarPinned || isHostSidebarHovered;
+  const isHostSidebarExpanded = !leftSidebarCollapsed && (leftSidebarPinned || isHostSidebarHovered);
 
   useEffect(() => {
     localStorage.setItem('leftSidebarPinned', String(leftSidebarPinned));
-    localStorage.setItem('leftSidebarCollapsed', String(!isHostSidebarExpanded));
+    localStorage.setItem('leftSidebarCollapsed', String(leftSidebarCollapsed));
     localStorage.setItem('leftSidebarWidth', String(leftSidebarWidth));
-  }, [leftSidebarPinned, isHostSidebarExpanded, leftSidebarWidth]);
+  }, [leftSidebarPinned, leftSidebarCollapsed, leftSidebarWidth]);
 
   useEffect(() => {
     localStorage.setItem('rightPanelVisible', String(rightPanelVisible));
     localStorage.setItem('rightPanelPinned', String(rightPanelPinned));
     localStorage.setItem('rightPanelWidth', String(rightPanelWidth));
   }, [rightPanelVisible, rightPanelPinned, rightPanelWidth]);
+
+  useEffect(() => {
+    localStorage.setItem('ftpScrollPosition', String(ftpScrollPosition));
+  }, [ftpScrollPosition]);
 
   // Extract all unique tags from hosts
   const allTags = useMemo(() => {
@@ -733,7 +745,7 @@ function App() {
         }`}
       >
         {/* Sticky Top Section */}
-        <div className="p-3 border-b border-border flex flex-col gap-2 shrink-0">
+        <div className="sticky top-0 z-20 p-3 border-b border-border flex flex-col gap-2 shrink-0 bg-[#161b22]/95 backdrop-blur">
           <div className={`flex items-center ${isHostSidebarExpanded ? 'justify-between' : 'justify-center'} gap-2`}>
             {isHostSidebarExpanded && (
               <span className="font-semibold text-sm truncate flex items-center gap-1.5 text-white">
@@ -742,6 +754,13 @@ function App() {
               </span>
             )}
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => setLeftSidebarCollapsed(value => !value)}
+                title={leftSidebarCollapsed ? 'Show host sidebar' : 'Collapse host sidebar'}
+                className="p-1.5 hover:bg-white/10 text-textMuted hover:text-white rounded-md transition cursor-pointer"
+              >
+                {leftSidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+              </button>
               <button
                 onClick={() => setLeftSidebarPinned(val => !val)}
                 title={leftSidebarPinned ? 'Unpin host sidebar' : 'Pin host sidebar'}
@@ -760,9 +779,8 @@ function App() {
               )}
             </div>
           </div>
-          {isHostSidebarExpanded && (
+          {isHostSidebarExpanded ? (
             <>
-              {/* Search Host Input */}
               <input
                 type="text"
                 placeholder="Search hosts..."
@@ -770,8 +788,7 @@ function App() {
                 onChange={e => setHostSearchQuery(e.target.value)}
                 className="w-full bg-background border border-border rounded px-2.5 py-1 text-xs text-white placeholder-textMuted/50 focus:outline-none focus:border-primary transition"
               />
-              
-              {/* Tags/Groups selection if any tags exist */}
+
               {allTags.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1 max-h-16 overflow-y-auto pr-1">
                   <button
@@ -796,11 +813,15 @@ function App() {
                 </div>
               )}
             </>
+          ) : (
+            <div className="rounded-md border border-border bg-black/20 px-2 py-3 text-center text-[10px] text-textMuted">
+              <Server size={14} className="mx-auto text-primary/90" />
+            </div>
           )}
         </div>
 
         {/* Scrollable Host List */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 select-none overflow-x-hidden">
+        <div className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-2 space-y-1 select-none ${isHostSidebarExpanded ? '' : 'hidden'}`}>
           {loadingHosts ? (
             <div className="p-4 flex flex-col items-center space-y-2 text-center text-xs text-textMuted">
               <Loader2 size={16} className="animate-spin text-primary" />
@@ -1006,7 +1027,7 @@ function App() {
               {rightPanelVisible ? (
                 <div
                   style={{ width: `${rightPanelWidth}px` }}
-                  className={`h-full shrink-0 flex flex-col z-30 bg-[#161b22] ${
+                  className={`h-full min-h-0 shrink-0 flex flex-col z-30 bg-[#161b22] overflow-hidden ${
                     !rightPanelPinned
                       ? 'absolute right-0 top-0 bottom-0 shadow-2xl border-l border-border'
                       : 'border-l border-border relative'
@@ -1019,6 +1040,8 @@ function App() {
                     isPinned={rightPanelPinned}
                     onTogglePin={() => setRightPanelPinned(p => !p)}
                     onToggleVisible={() => setRightPanelVisible(v => !v)}
+                    scrollPosition={ftpScrollPosition}
+                    onScrollPositionChange={setFtpScrollPosition}
                   />
                 </div>
               ) : (

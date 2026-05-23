@@ -9,6 +9,8 @@ interface SftpFileManagerProps {
   isPinned: boolean;
   onTogglePin: () => void;
   onToggleVisible: () => void;
+  scrollPosition: number;
+  onScrollPositionChange: (value: number) => void;
 }
 
 type Progress = { label: string; value: number | null } | null;
@@ -56,7 +58,16 @@ function formatDate(mtimeSeconds: number) {
   return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export function SftpFileManager({ sessionId, hostId, isVisible, isPinned, onTogglePin, onToggleVisible }: SftpFileManagerProps) {
+export function SftpFileManager({
+  sessionId,
+  hostId,
+  isVisible,
+  isPinned,
+  onTogglePin,
+  onToggleVisible,
+  scrollPosition,
+  onScrollPositionChange,
+}: SftpFileManagerProps) {
   const [currentPath, setCurrentPath] = useState('/');
   const [entries, setEntries] = useState<SftpEntry[]>([]);
   const [selected, setSelected] = useState<SftpEntry | null>(null);
@@ -71,6 +82,7 @@ export function SftpFileManager({ sessionId, hostId, isVisible, isPinned, onTogg
 
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'mtime' | 'permissions'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const parentPath = useMemo(() => dirname(currentPath), [currentPath]);
 
@@ -85,11 +97,19 @@ export function SftpFileManager({ sessionId, hostId, isVisible, isPinned, onTogg
     setLoading(true);
     setError('');
     try {
+      if (path !== currentPath) {
+        onScrollPositionChange(0);
+      }
       const result = await runSftp<{ entries?: SftpEntry[] } | SftpEntry[]>('list', { path });
       const nextEntries = Array.isArray(result) ? result : (result.entries || []);
       setEntries(nextEntries);
       setCurrentPath(path);
       setSelected(null);
+      requestAnimationFrame(() => {
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop = path === currentPath ? scrollPosition : 0;
+        }
+      });
     } catch (err: any) {
       setError(err.message || 'Unable to list directory');
     } finally {
@@ -100,6 +120,12 @@ export function SftpFileManager({ sessionId, hostId, isVisible, isPinned, onTogg
   useEffect(() => {
     refresh('/');
   }, [sessionId, hostId]);
+
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollPosition;
+    }
+  }, [scrollPosition, currentPath, entries.length]);
 
   const operate = async (label: string, operation: string, payload: Record<string, any>, reload = true) => {
     setError('');
@@ -238,7 +264,11 @@ export function SftpFileManager({ sessionId, hostId, isVisible, isPinned, onTogg
   }, [entries, sortBy, sortOrder]);
 
   return (
-    <aside className="h-full flex flex-col min-w-0 bg-[#161b22] text-textMain relative select-none">
+    <aside
+      aria-hidden={!isVisible}
+      data-mode={isPinned ? 'pinned' : 'overlay'}
+      className="h-full min-h-0 flex flex-col min-w-0 bg-[#161b22] text-textMain relative select-none overflow-hidden"
+    >
       {/* 1. Sticky Header */}
       <div className="h-12 border-b border-border px-3 flex items-center gap-2 shrink-0 bg-surface">
         <Folder size={16} className="text-primary" />
@@ -352,7 +382,11 @@ export function SftpFileManager({ sessionId, hostId, isVisible, isPinned, onTogg
       </div>
 
       {/* 3. Scrollable File List Container */}
-      <div className="flex-1 overflow-y-auto min-h-0 bg-background/20 select-none">
+      <div
+        ref={scrollContainerRef}
+        onScroll={(event) => onScrollPositionChange(event.currentTarget.scrollTop)}
+        className="flex-1 overflow-y-auto min-h-0 bg-background/20 select-none"
+      >
         {loading && entries.length === 0 ? (
           <div className="h-full flex items-center justify-center text-textMuted gap-2 text-xs">
             <Loader2 size={14} className="animate-spin text-primary" />

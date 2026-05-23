@@ -3,7 +3,12 @@
 @tailwind utilities;
 
 @layer base {
+  html,
+  #root {
+    @apply h-full;
+  }
+
   body {
-    @apply bg-background text-textMain m-0 p-0 overflow-hidden font-sans;
+    @apply bg-background text-textMain m-0 p-0 overflow-hidden font-sans min-h-full;
   }
 }

@@ -34,6 +34,11 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
+  const activeRef = useRef(active);
+
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -135,7 +140,7 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
     window.addEventListener('resize', handleResize);
 
     const resizeObserver = new ResizeObserver(() => {
-      if (active) {
+      if (activeRef.current) {
         handleResize();
       }
     });
@@ -164,7 +169,7 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
       socket?.close();
       term.current?.dispose();
     };
-  }, [hostId, host, sessionId, active]);
+  }, [hostId, sessionId]);
 
   useEffect(() => {
     if (active && fitAddon.current && term.current) {
