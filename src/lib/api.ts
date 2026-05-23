@@ -90,8 +90,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
 
-  const payload = await response.json().catch(() => ({}));
+  const contentType = response.headers.get('content-type') || '';
+  const payload = contentType.includes('application/json')
+    ? await response.json().catch(() => ({}))
+    : {};
   if (!response.ok) {
+    if (!contentType.includes('application/json')) {
+      const text = await response.text().catch(() => '');
+      const server = response.headers.get('server');
+      const source = server?.toLowerCase().includes('nginx') ? ' from nginx/ModSecurity' : '';
+      const excerpt = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error(`Request failed with status ${response.status} ${response.statusText}${source}${excerpt ? `: ${excerpt}` : ''}`);
+    }
     const detail = payload.details ? ` (${payload.details})` : '';
     const message = payload.error?.message || payload.error || payload.message || `Request failed with status ${response.status}`;
     throw new Error(`${message}${detail}`);

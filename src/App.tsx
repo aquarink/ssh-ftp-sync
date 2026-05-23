@@ -328,19 +328,19 @@ function App() {
         }
       }
 
-      const newHostData = {
+      const newHostData: Omit<Host, 'id'> & { removeCredential?: boolean } = {
         name: hostName,
         host: fHost,
         port: parseInt(fPort) || 22,
         username: fUser,
-        password: '',
         authType,
         credentialId: credentialId || null,
         startupDirectory: fStartupDirectory || null,
         notes: fNotes || null,
         tags: fTags || null,
-        removeCredential: removeSavedCredential,
       };
+      if (fAuthType === 'password' && fPass) newHostData.password = fPass;
+      if (removeSavedCredential) newHostData.removeCredential = true;
       const { host } = editingHost
         ? await api.updateHost(editingHost.id, newHostData)
         : await api.createHost(newHostData);
