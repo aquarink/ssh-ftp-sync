@@ -134,6 +134,15 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
     };
     window.addEventListener('resize', handleResize);
 
+    const resizeObserver = new ResizeObserver(() => {
+      if (active) {
+        handleResize();
+      }
+    });
+    if (terminalRef.current) {
+      resizeObserver.observe(terminalRef.current);
+    }
+
     // Listen to data from SSH server
     const onData = (_: any, data: { id: string, data: string }) => {
       if (data.id === sessionId && term.current) {
@@ -147,6 +156,7 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (window.ipcRenderer) {
         window.ipcRenderer.send('ssh-disconnect', { id: sessionId });
         window.ipcRenderer.removeListener('ssh-data', onData);
@@ -154,13 +164,24 @@ export function TerminalView({ sessionId, hostId, host, active, onConnected, onE
       socket?.close();
       term.current?.dispose();
     };
-  }, [hostId, host, sessionId]);
+  }, [hostId, host, sessionId, active]);
 
   useEffect(() => {
-    if (active) {
-      requestAnimationFrame(() => fitAddon.current?.fit());
+    if (active && fitAddon.current && term.current) {
+      requestAnimationFrame(() => {
+        if (fitAddon.current && term.current) {
+          fitAddon.current.fit();
+          if (window.ipcRenderer) {
+            window.ipcRenderer.send('ssh-resize', { 
+              id: sessionId, 
+              cols: term.current.cols, 
+              rows: term.current.rows 
+            });
+          }
+        }
+      });
     }
-  }, [active]);
+  }, [active, sessionId]);
 
   return <div ref={terminalRef} className="w-full h-full p-2" />;
 }
