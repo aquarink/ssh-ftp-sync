@@ -48,6 +48,8 @@ function connectSftp(hostConfig) {
       password: hostConfig.password || undefined,
       privateKey: hostConfig.privateKey || undefined,
       passphrase: hostConfig.passphrase || undefined,
+      cert: hostConfig.certificate || undefined,
+      agent: hostConfig.agent || undefined,
       readyTimeout: 15000,
       keepaliveInterval: 25000,
       keepaliveCountMax: 3,

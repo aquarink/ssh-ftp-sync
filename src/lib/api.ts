@@ -17,7 +17,7 @@ export interface Host {
   port: number;
   username: string;
   password?: string;
-  authType?: 'password' | 'private_key' | 'credential' | 'agent' | 'manual';
+  authType?: 'password' | 'private_key' | 'credential' | 'identity' | 'agent' | 'manual' | 'one_time';
   credentialId?: string | null;
 }
 
@@ -41,12 +41,29 @@ export interface SftpEntry {
 
 export interface SshCredential {
   id: string;
-  type: 'password' | 'private_key' | 'certificate' | 'agent';
+  type: 'password' | 'private_key' | 'key_pair' | 'certificate' | 'key_with_certificate' | 'agent' | 'one_time';
   label: string;
   username?: string | null;
   fingerprint?: string | null;
+  publicKeyFingerprint?: string | null;
+  certificateFingerprint?: string | null;
+  notes?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type SshIdentity = SshCredential;
+
+export interface SshIdentityPayload {
+  type: SshIdentity['type'];
+  label: string;
+  username?: string;
+  password?: string;
+  privateKey?: string;
+  publicKey?: string;
+  certificate?: string;
+  passphrase?: string;
+  notes?: string;
 }
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
@@ -114,25 +131,43 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ approvalStatus }),
     }),
-  listCredentials: () => request<{ credentials: SshCredential[] }>('/api/credentials'),
-  createCredential: (credential: {
-    type: 'password' | 'private_key' | 'certificate' | 'agent';
-    label: string;
-    username?: string;
-    password?: string;
-    privateKey?: string;
-    passphrase?: string;
-  }) =>
-    request<{ credential: SshCredential }>('/api/credentials', {
+  listIdentities: () => request<{ identities: SshIdentity[]; credentials: SshIdentity[] }>('/api/identities'),
+  createIdentity: (identity: SshIdentityPayload) =>
+    request<{ identity: SshIdentity; credential: SshIdentity }>('/api/identities', {
+      method: 'POST',
+      body: JSON.stringify(identity),
+    }),
+  updateIdentity: (id: string, identity: { label: string; username?: string; notes?: string }) =>
+    request<{ identity: SshIdentity }>(`/api/identities/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(identity),
+    }),
+  deleteIdentity: (id: string) =>
+    request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  testIdentity: (id: string, payload: { host: string; port: number; username: string }) =>
+    request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  assignIdentityToHost: (hostId: string, identityId: string | null) =>
+    request<{ ok: true }>(`/api/hosts/${encodeURIComponent(hostId)}/identity`, {
+      method: 'PUT',
+      body: JSON.stringify({ identityId }),
+    }),
+  listCredentials: () => request<{ credentials: SshCredential[] }>('/api/identities'),
+  createCredential: (credential: SshIdentityPayload) =>
+    request<{ credential: SshCredential; identity: SshIdentity }>('/api/identities', {
       method: 'POST',
       body: JSON.stringify(credential),
     }),
   deleteCredential: (id: string) =>
-    request<{ ok: true }>(`/api/credentials/${encodeURIComponent(id)}`, {
+    request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
   testCredential: (id: string, payload: { host: string; port: number; username: string }) =>
-    request<{ ok: true }>(`/api/credentials/${encodeURIComponent(id)}/test`, {
+    request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}/test`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

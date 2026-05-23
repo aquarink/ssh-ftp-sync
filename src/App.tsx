@@ -58,7 +58,7 @@ function App() {
   const [fPort, setFPort] = useState('22');
   const [fUser, setFUser] = useState('root');
   const [fPass, setFPass] = useState('');
-  const [fAuthType, setFAuthType] = useState<'password' | 'credential'>('password');
+  const [fAuthType, setFAuthType] = useState<'password' | 'identity' | 'one_time'>('password');
   const [fCredentialId, setFCredentialId] = useState('');
 
   const navigate = (path: string) => {
@@ -146,8 +146,8 @@ function App() {
   const fetchCredentials = async () => {
     if (!session) return;
     try {
-      const { credentials } = await api.listCredentials();
-      setCredentials(credentials);
+      const { identities, credentials } = await api.listIdentities();
+      setCredentials(identities || credentials);
     } catch (err: any) {
       console.error('Error fetching credentials:', err.message);
     }
@@ -246,21 +246,21 @@ function App() {
 
     try {
       let authType = fAuthType;
-      let credentialId = fAuthType === 'credential' ? fCredentialId : '';
+      let credentialId = fAuthType === 'identity' ? fCredentialId : '';
       const hostName = fName || fHost;
 
       if (fAuthType === 'password' && fPass) {
-        const { credential } = await api.createCredential({
+        const { identity } = await api.createIdentity({
           type: 'password',
           label: `${hostName} password`,
           username: fUser,
           password: fPass,
         });
-        credentialId = credential.id;
-        authType = 'credential';
+        credentialId = identity.id;
+        authType = 'identity';
         if (window.ipcRenderer) {
-          await window.ipcRenderer.invoke('credential-save-secret', {
-            id: credential.id,
+          await window.ipcRenderer.invoke('identity-save-secret', {
+            id: identity.id,
             secret: { type: 'password', password: fPass },
           });
         }
@@ -773,23 +773,29 @@ function App() {
                 <label className="block text-xs text-textMuted mb-1">Authentication</label>
                 <select value={fAuthType} onChange={e => setFAuthType(e.target.value as any)} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
                   <option value="password">Password</option>
-                  <option value="credential">Keychain credential</option>
+                  <option value="identity">Identity / Keychain</option>
+                  <option value="one_time">One-time key</option>
                 </select>
               </div>
-              {fAuthType === 'credential' && (
+              {fAuthType === 'identity' && (
                 <div>
-                  <label className="block text-xs text-textMuted mb-1">Credential</label>
+                  <label className="block text-xs text-textMuted mb-1">Identity</label>
                   <select value={fCredentialId} onChange={e => setFCredentialId(e.target.value)} required className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
-                    <option value="">Select credential</option>
+                    <option value="">Select identity</option>
                     {credentials.map(credential => (
                       <option key={credential.id} value={credential.id}>{credential.label}</option>
                     ))}
                   </select>
                 </div>
               )}
+              {fAuthType === 'one_time' && (
+                <div className="p-3 bg-yellow-500/10 text-yellow-200 border border-yellow-500/20 rounded text-xs leading-5">
+                  One-time key is intentionally not saved with the host. Save the host first, then use a saved identity or connect with a transient identity flow.
+                </div>
+              )}
               <div>
                 <label className="block text-xs text-textMuted mb-1">Password</label>
-                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Leave empty if using keychain credential" />
+                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Leave empty if using identity" />
               </div>
 
               <div className="pt-4 flex justify-end space-x-3">

@@ -49,8 +49,12 @@ async function getUserHost(req, url) {
       LIMIT 1`,
     [host.credential_id, user.id]
   );
-  if (!credentials[0]) throw Object.assign(new Error('Assigned SSH credential was not found'), { status: 400 });
-  return { ...host, ...readCredentialSecret(credentials[0].storage_ref) };
+  if (!credentials[0]) throw Object.assign(new Error('Assigned SSH identity was not found'), { status: 400 });
+  const secret = readCredentialSecret(credentials[0].storage_ref);
+  if (secret.type === 'agent' && !secret.agent) {
+    throw Object.assign(new Error('SSH agent identity is not available on this server'), { status: 400 });
+  }
+  return { ...host, ...secret };
 }
 
 function readMessage(raw) {
@@ -142,6 +146,8 @@ function connectShell(ws, host) {
     password: host.password || undefined,
     privateKey: host.privateKey || undefined,
     passphrase: host.passphrase || undefined,
+    cert: host.certificate || undefined,
+    agent: host.agent || undefined,
     readyTimeout: 15000,
     keepaliveInterval: webSocketKeepaliveMs,
     keepaliveCountMax: 3,

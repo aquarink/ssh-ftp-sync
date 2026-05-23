@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { createCipheriv, createDecipheriv, createHash, createPrivateKey, randomBytes } = require('crypto');
+const { createCipheriv, createDecipheriv, createHash, randomBytes } = require('crypto');
+const { utils: { parseKey } } = require('ssh2');
 
 const vaultDir = process.env.CREDENTIAL_VAULT_DIR || path.join(__dirname, '..', '.credential-vault');
 const defaultVaultKey = 'development-credential-vault-key-change-me';
@@ -60,27 +61,50 @@ function removeCredentialSecret(storageRef) {
   }
 }
 
-function privateKeyFingerprint(privateKey, passphrase) {
-  const keyObject = createPrivateKey({ key: privateKey, passphrase: passphrase || undefined });
-  const publicDer = keyObject.export({ type: 'spki', format: 'der' });
-  return `SHA256:${createHash('sha256').update(publicDer).digest('base64').replace(/=+$/, '')}`;
+function sshBlobFingerprint(value) {
+  const parts = String(value || '').trim().split(/\s+/);
+  if (parts.length < 2) throw Object.assign(new Error('Invalid SSH public key format'), { status: 400 });
+  return `SHA256:${createHash('sha256').update(Buffer.from(parts[1], 'base64')).digest('base64').replace(/=+$/, '')}`;
 }
 
 function validatePrivateKey(privateKey, passphrase) {
-  if (typeof privateKey !== 'string' || !privateKey.includes('PRIVATE KEY')) {
+  if (typeof privateKey !== 'string' || !/-----BEGIN (OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----/.test(privateKey)) {
     throw Object.assign(new Error('Private key must be OpenSSH or PEM format'), { status: 400 });
   }
-  try {
-    return privateKeyFingerprint(privateKey, passphrase);
-  } catch {
+  const parsed = parseKey(privateKey, passphrase || undefined);
+  if (parsed instanceof Error) {
     throw Object.assign(new Error('Private key or passphrase is invalid'), { status: 400 });
   }
+  const key = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!key?.isPrivateKey?.()) throw Object.assign(new Error('Private key is invalid'), { status: 400 });
+  return sshBlobFingerprint(key.getPublicSSH());
+}
+
+function validatePublicKey(publicKey) {
+  if (!publicKey) return null;
+  const key = String(publicKey).trim();
+  if (!/^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(256|384|521))\s+/.test(key)) {
+    throw Object.assign(new Error('Unsupported public key format'), { status: 400 });
+  }
+  const parsed = parseKey(key);
+  if (parsed instanceof Error) throw Object.assign(new Error('Public key is invalid'), { status: 400 });
+  return sshBlobFingerprint(key);
+}
+
+function validateCertificate(certificate) {
+  if (!certificate) return null;
+  const cert = String(certificate).trim();
+  if (!/^(ssh-rsa-cert-v01@openssh\.com|ssh-ed25519-cert-v01@openssh\.com|ecdsa-sha2-nistp(256|384|521)-cert-v01@openssh\.com)\s+/.test(cert)) {
+    throw Object.assign(new Error('Unsupported OpenSSH certificate format'), { status: 400 });
+  }
+  return sshBlobFingerprint(cert);
 }
 
 module.exports = {
-  privateKeyFingerprint,
   readCredentialSecret,
   removeCredentialSecret,
   saveCredentialSecret,
+  validateCertificate,
   validatePrivateKey,
+  validatePublicKey,
 };

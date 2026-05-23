@@ -10,6 +10,10 @@ ipcMain.on('ssh-connect', (event, { id, hostId, host, port, username, password, 
   try {
     if (!password && !privateKey && credentialId) {
       resolvedSecret = readCredentialSecret(credentialId);
+      if (resolvedSecret.type === 'agent') {
+        resolvedSecret.agent = process.platform === 'win32' ? 'pageant' : process.env.SSH_AUTH_SOCK;
+        if (!resolvedSecret.agent) throw new Error('SSH agent is not available on this desktop session');
+      }
     }
   } catch (error) {
     event.reply('ssh-error', { id, message: error.message });
@@ -29,7 +33,17 @@ ipcMain.handle('credential-save-secret', async (event, { id, secret }) => {
   return { ok: true };
 });
 
+ipcMain.handle('identity-save-secret', async (event, { id, secret }) => {
+  saveCredentialSecret(id, secret);
+  return { ok: true };
+});
+
 ipcMain.handle('credential-remove-secret', async (event, { id }) => {
+  removeCredentialSecret(id);
+  return { ok: true };
+});
+
+ipcMain.handle('identity-remove-secret', async (event, { id }) => {
   removeCredentialSecret(id);
   return { ok: true };
 });

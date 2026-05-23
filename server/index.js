@@ -19,7 +19,9 @@ const {
   readCredentialSecret,
   removeCredentialSecret,
   saveCredentialSecret,
+  validateCertificate,
   validatePrivateKey,
+  validatePublicKey,
 } = require('./credentialStore');
 
 const port = Number(process.env.API_PORT || 8790);
@@ -67,7 +69,7 @@ function hostPayload(body) {
   const name = String(body.name || host).trim();
   const port = Number.parseInt(body.port, 10) || 22;
   const password = typeof body.password === 'string' ? body.password : '';
-  const authType = ['password', 'private_key', 'credential', 'agent', 'manual'].includes(body.authType) ? body.authType : 'password';
+  const authType = ['password', 'private_key', 'credential', 'identity', 'agent', 'manual', 'one_time'].includes(body.authType) ? body.authType : 'password';
   const credentialId = typeof body.credentialId === 'string' && body.credentialId ? body.credentialId : null;
 
   if (!host || !username || !name) {
@@ -286,74 +288,151 @@ function publicCredential(row) {
     label: row.label,
     username: row.username,
     fingerprint: row.fingerprint,
+    publicKeyFingerprint: row.public_key_fingerprint,
+    certificateFingerprint: row.certificate_fingerprint,
+    notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-async function listCredentials(req, res) {
+async function listIdentities(req, res) {
   const user = await requireUser(req, res);
   if (!user) return;
   const [rows] = await pool.execute(
-    `SELECT id, type, label, username, fingerprint, created_at, updated_at
+    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at
        FROM ssh_credentials
       WHERE user_id = ?
       ORDER BY created_at DESC`,
     [user.id]
   );
-  json(res, 200, { credentials: rows.map(publicCredential) });
+  const identities = rows.map(publicCredential);
+  json(res, 200, { identities, credentials: identities });
 }
 
-async function createCredential(req, res) {
-  const user = await requireUser(req, res);
-  if (!user) return;
-  const body = await readJson(req);
-  const id = randomUUID();
-  const type = ['password', 'private_key', 'certificate', 'agent'].includes(body.type) ? body.type : 'private_key';
+function identityPayload(body) {
+  const type = ['password', 'private_key', 'key_pair', 'certificate', 'key_with_certificate', 'agent', 'one_time'].includes(body.type) ? body.type : 'private_key';
   const label = String(body.label || '').trim();
   const username = String(body.username || '').trim() || null;
-  if (!label) throw Object.assign(new Error('Credential label is required'), { status: 400 });
+  const notes = String(body.notes || '').trim() || null;
+  if (!label) throw Object.assign(new Error('Identity label is required'), { status: 400 });
 
-  let secret = {};
+  let secret = { type };
   let fingerprint = null;
+  let publicKeyFingerprint = null;
+  let certificateFingerprint = null;
+
   if (type === 'password') {
     if (typeof body.password !== 'string' || !body.password) {
       throw Object.assign(new Error('Password is required'), { status: 400 });
     }
     secret = { type, password: body.password };
-  } else if (type === 'private_key' || type === 'certificate') {
+  }
+  if (['private_key', 'key_pair', 'key_with_certificate'].includes(type)) {
     fingerprint = validatePrivateKey(body.privateKey, body.passphrase);
-    secret = { type, privateKey: body.privateKey, passphrase: body.passphrase || '' };
-  } else {
-    secret = { type };
+    publicKeyFingerprint = validatePublicKey(body.publicKey);
+    secret = {
+      type,
+      privateKey: body.privateKey,
+      publicKey: body.publicKey || '',
+      passphrase: body.passphrase || '',
+    };
+  }
+  if (['certificate', 'key_with_certificate'].includes(type)) {
+    certificateFingerprint = validateCertificate(body.certificate);
+    secret = { ...secret, certificate: body.certificate || '' };
+  }
+  if (type === 'agent') {
+    secret = { type, agent: process.platform === 'win32' ? 'pageant' : (process.env.SSH_AUTH_SOCK || '') };
+  }
+  if (type === 'one_time') {
+    throw Object.assign(new Error('One-time identities are not saved. Select one-time key from the host connection form.'), { status: 400 });
   }
 
-  const storageRef = saveCredentialSecret(id, secret);
+  return { type, label, username, notes, secret, fingerprint, publicKeyFingerprint, certificateFingerprint };
+}
+
+async function createIdentity(req, res) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const id = randomUUID();
+  const identity = identityPayload(await readJson(req));
+
+  const storageRef = saveCredentialSecret(id, identity.secret);
   await pool.execute(
-    `INSERT INTO ssh_credentials (id, user_id, type, label, username, fingerprint, storage_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id, user.id, type, label, username, fingerprint, storageRef]
+    `INSERT INTO ssh_credentials
+      (id, user_id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, storage_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, user.id, identity.type, identity.label, identity.username, identity.fingerprint, identity.publicKeyFingerprint, identity.certificateFingerprint, identity.notes, storageRef]
   );
   const [rows] = await pool.execute(
-    `SELECT id, type, label, username, fingerprint, created_at, updated_at
+    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at
        FROM ssh_credentials
       WHERE id = ? AND user_id = ?
       LIMIT 1`,
     [id, user.id]
   );
-  json(res, 201, { credential: publicCredential(rows[0]) });
+  const publicIdentity = publicCredential(rows[0]);
+  json(res, 201, { identity: publicIdentity, credential: publicIdentity });
 }
 
-async function deleteCredential(req, res, id) {
+async function getIdentity(req, res, id) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const [rows] = await pool.execute(
+    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at
+       FROM ssh_credentials
+      WHERE id = ? AND user_id = ?
+      LIMIT 1`,
+    [id, user.id]
+  );
+  if (!rows[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
+  json(res, 200, { identity: publicCredential(rows[0]), credential: publicCredential(rows[0]) });
+}
+
+async function updateIdentity(req, res, id) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const body = await readJson(req);
+  const label = String(body.label || '').trim();
+  const username = String(body.username || '').trim() || null;
+  const notes = String(body.notes || '').trim() || null;
+  if (!label) throw Object.assign(new Error('Identity label is required'), { status: 400 });
+  await pool.execute(
+    `UPDATE ssh_credentials
+        SET label = ?, username = ?, notes = ?
+      WHERE id = ? AND user_id = ?`,
+    [label, username, notes, id, user.id]
+  );
+  return getIdentity(req, res, id);
+}
+
+async function deleteIdentity(req, res, id) {
   const user = await requireUser(req, res);
   if (!user) return;
   const [rows] = await pool.execute(
     'SELECT storage_ref FROM ssh_credentials WHERE id = ? AND user_id = ? LIMIT 1',
     [id, user.id]
   );
-  if (!rows[0]) throw Object.assign(new Error('Credential not found'), { status: 404 });
+  if (!rows[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
   removeCredentialSecret(rows[0].storage_ref);
   await pool.execute('DELETE FROM ssh_credentials WHERE id = ? AND user_id = ?', [id, user.id]);
+  json(res, 200, { ok: true });
+}
+
+async function assignIdentityToHost(req, res, hostId) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const body = await readJson(req);
+  const identityId = typeof body.identityId === 'string' && body.identityId ? body.identityId : null;
+  if (identityId) {
+    const [identities] = await pool.execute('SELECT id FROM ssh_credentials WHERE id = ? AND user_id = ? LIMIT 1', [identityId, user.id]);
+    if (!identities[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
+  }
+  await pool.execute(
+    'UPDATE hosts SET auth_type = ?, credential_id = ? WHERE id = ? AND user_id = ?',
+    [identityId ? 'identity' : 'password', identityId, hostId, user.id]
+  );
   json(res, 200, { ok: true });
 }
 
@@ -380,12 +459,14 @@ function testSshConnection(config) {
       password: config.password || undefined,
       privateKey: config.privateKey || undefined,
       passphrase: config.passphrase || undefined,
+      cert: config.certificate || undefined,
+      agent: config.agent || undefined,
       readyTimeout: 15000,
     });
   });
 }
 
-async function testCredential(req, res, id) {
+async function testIdentity(req, res, id) {
   const user = await requireUser(req, res);
   if (!user) return;
   const body = await readJson(req);
@@ -400,8 +481,12 @@ async function testCredential(req, res, id) {
       LIMIT 1`,
     [id, user.id]
   );
-  if (!rows[0]) throw Object.assign(new Error('Credential not found'), { status: 404 });
-  await testSshConnection({ host, username, port, ...readCredentialSecret(rows[0].storage_ref) });
+  if (!rows[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
+  const secret = readCredentialSecret(rows[0].storage_ref);
+  if (secret.type === 'agent' && !secret.agent) {
+    throw Object.assign(new Error('SSH agent is not available. SSH_AUTH_SOCK is empty on this server.'), { status: 400 });
+  }
+  await testSshConnection({ host, username, port, ...secret });
   json(res, 200, { ok: true });
 }
 
@@ -414,8 +499,12 @@ async function resolveHostCredential(userId, host) {
       LIMIT 1`,
     [host.credential_id, userId]
   );
-  if (!rows[0]) throw Object.assign(new Error('Assigned SSH credential was not found'), { status: 400 });
-  return { ...host, ...readCredentialSecret(rows[0].storage_ref) };
+  if (!rows[0]) throw Object.assign(new Error('Assigned SSH identity was not found'), { status: 400 });
+  const secret = readCredentialSecret(rows[0].storage_ref);
+  if (secret.type === 'agent' && !secret.agent) {
+    throw Object.assign(new Error('SSH agent identity is not available on this server'), { status: 400 });
+  }
+  return { ...host, ...secret };
 }
 
 async function deleteHost(req, res, id) {
@@ -466,21 +555,27 @@ async function route(req, res) {
   if (req.method === 'PUT' && url.pathname === '/api/auth/password') return changePassword(req, res);
   if (req.method === 'GET' && url.pathname === '/api/hosts') return listHosts(req, res);
   if (req.method === 'POST' && url.pathname === '/api/hosts') return createHost(req, res);
-  if (req.method === 'GET' && url.pathname === '/api/credentials') return listCredentials(req, res);
-  if (req.method === 'POST' && url.pathname === '/api/credentials') return createCredential(req, res);
+  if (req.method === 'GET' && (url.pathname === '/api/credentials' || url.pathname === '/api/identities')) return listIdentities(req, res);
+  if (req.method === 'POST' && (url.pathname === '/api/credentials' || url.pathname === '/api/identities')) return createIdentity(req, res);
   if (req.method === 'GET' && url.pathname === '/api/admin/users') return listUsers(req, res);
 
   const hostId = url.pathname.match(/^\/api\/hosts\/([^/]+)$/);
   if (req.method === 'DELETE' && hostId) {
     return deleteHost(req, res, decodeURIComponent(hostId[1]));
   }
-  const credentialId = url.pathname.match(/^\/api\/credentials\/([^/]+)$/);
-  if (req.method === 'DELETE' && credentialId) {
-    return deleteCredential(req, res, decodeURIComponent(credentialId[1]));
+  const hostIdentity = url.pathname.match(/^\/api\/hosts\/([^/]+)\/identity$/);
+  if (req.method === 'PUT' && hostIdentity) {
+    return assignIdentityToHost(req, res, decodeURIComponent(hostIdentity[1]));
   }
-  const credentialTest = url.pathname.match(/^\/api\/credentials\/([^/]+)\/test$/);
-  if (req.method === 'POST' && credentialTest) {
-    return testCredential(req, res, decodeURIComponent(credentialTest[1]));
+  const identityId = url.pathname.match(/^\/api\/(?:credentials|identities)\/([^/]+)$/);
+  if (identityId) {
+    if (req.method === 'GET') return getIdentity(req, res, decodeURIComponent(identityId[1]));
+    if (req.method === 'PUT') return updateIdentity(req, res, decodeURIComponent(identityId[1]));
+    if (req.method === 'DELETE') return deleteIdentity(req, res, decodeURIComponent(identityId[1]));
+  }
+  const identityTest = url.pathname.match(/^\/api\/(?:credentials|identities)\/([^/]+)\/test$/);
+  if (req.method === 'POST' && identityTest) {
+    return testIdentity(req, res, decodeURIComponent(identityTest[1]));
   }
   const sftpMatch = url.pathname.match(/^\/api\/hosts\/([^/]+)\/sftp\/([a-z]+)$/);
   if (req.method === 'POST' && sftpMatch) {
