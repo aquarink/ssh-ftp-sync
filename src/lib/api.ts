@@ -33,6 +33,17 @@ export interface IdentityTestResult {
   message: string;
 }
 
+export interface SessionMetrics {
+  activeSessions: number;
+  sessionsCreated: number;
+  sessionsClosed: number;
+  cleanupCalls: number;
+  cleanupDuplicateCalls: number;
+  staleSessionsCleaned: number;
+  reconnectAttempts: number;
+  cleanupErrors: number;
+}
+
 export interface ManagedUser extends User {
   createdAt: string;
   emailCheckResult?: string | null;
@@ -212,6 +223,8 @@ export const api = {
       warning: string[];
       checkedAt: string;
     }>('/api/security/vault-health'),
+  sessionMetrics: () =>
+    request<{ ok: true; metrics: SessionMetrics }>('/api/security/session-metrics'),
   sftpOperation: <T = any>(hostId: string, operation: string, payload: Record<string, any>) =>
     request<T>(`/api/hosts/${encodeURIComponent(hostId)}/sftp/${encodeURIComponent(operation)}`, {
       method: 'POST',

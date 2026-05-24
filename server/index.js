@@ -17,6 +17,7 @@ const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
 const { resolveIdentity } = require('./identityResolver');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
+const { cleanupSessionsByUser, getSessionMetrics } = require('./sessionLifecycle');
 const { vaultHealthCheck } = require('./vaultHealth');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
 const {
@@ -800,6 +801,14 @@ async function sftpOperation(req, res, hostId, operation) {
     const result = await runSftpOperation({
       host: resolved.host,
       credential: resolved.ephemeralCredential,
+      sessionMeta: {
+        sessionId: resolved.ephemeralCredential.sessionId,
+        userId: user.id,
+        hostId: resolved.host?.id || hostId,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        runtime: resolved.runtime,
+        purpose: resolved.purpose,
+      },
     }, operation, payload);
     json(res, 200, result);
   } catch (error) {
@@ -854,6 +863,10 @@ async function route(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/auth/register') return register(req, res);
   if (req.method === 'POST' && url.pathname === '/api/auth/login') return login(req, res);
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
+    const user = await getSessionUser(req);
+    if (user) {
+      cleanupSessionsByUser(user.id, 'logout');
+    }
     await destroySession(req);
     return json(res, 200, { ok: true }, { 'Set-Cookie': expiredSessionCookieHeader(req) });
   }
@@ -867,6 +880,11 @@ async function route(req, res) {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
     return json(res, 200, vaultHealthCheck());
+  }
+  if (req.method === 'GET' && url.pathname === '/api/security/session-metrics') {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    return json(res, 200, { ok: true, metrics: getSessionMetrics() });
   }
 
   const hostId = url.pathname.match(/^\/api\/hosts\/([^/]+)$/);

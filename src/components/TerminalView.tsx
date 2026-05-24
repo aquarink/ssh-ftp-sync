@@ -51,6 +51,7 @@ export function TerminalView({
   const containerRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
+  const inputDisposable = useRef<{ dispose: () => void } | null>(null);
   const activeRef = useRef(active);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -183,7 +184,7 @@ export function TerminalView({
     }
 
     // Listen to input from the user (typing)
-    term.current.onData((data) => {
+    inputDisposable.current = term.current.onData((data) => {
       if (window.ipcRenderer) {
         window.ipcRenderer.send('ssh-input', { id: sessionId, data });
       }
@@ -236,18 +237,25 @@ export function TerminalView({
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
+      inputDisposable.current?.dispose?.();
+      inputDisposable.current = null;
       if (window.ipcRenderer) {
         window.ipcRenderer.send('ssh-disconnect', { id: sessionId });
         window.ipcRenderer.removeListener('ssh-data', onData);
       }
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'disconnect' }));
+      }
       socket?.close();
+      fitAddon.current = null;
       term.current?.dispose();
+      term.current = null;
     };
   }, [hostId, sessionId]);
 
   useEffect(() => {
     if (active && fitAddon.current && term.current) {
-      requestAnimationFrame(() => {
+      const frame = requestAnimationFrame(() => {
         if (fitAddon.current && term.current) {
           fitAddon.current.fit();
           if (window.ipcRenderer) {
@@ -259,6 +267,7 @@ export function TerminalView({
           }
         }
       });
+      return () => cancelAnimationFrame(frame);
     }
   }, [active, sessionId]);
 
@@ -267,7 +276,7 @@ export function TerminalView({
     term.current.options.fontSize = fontSize;
     if (!active || !fitAddon.current) return;
 
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
       if (!term.current || !fitAddon.current) return;
       fitAddon.current.fit();
       if (window.ipcRenderer) {
@@ -278,6 +287,7 @@ export function TerminalView({
         });
       }
     });
+    return () => cancelAnimationFrame(frame);
   }, [fontSize, active, sessionId]);
 
   const handleContextMenu = (e: React.MouseEvent) => {

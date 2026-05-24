@@ -3,11 +3,21 @@ const { WebSocket, WebSocketServer } = require('ws');
 const { getSessionUser } = require('./auth');
 const { resolveIdentity } = require('./identityResolver');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
+const {
+  addTimer,
+  cleanupSession,
+  createSession,
+  getSession,
+  startSessionSweeper,
+  touchSession,
+  updateSession,
+} = require('./sessionLifecycle');
 const { logIdentityEvent } = require('./securityLog');
 
 const maxTerminalMessageBytes = 64 * 1024;
 const webSocketKeepaliveMs = 25000;
-const activeSessions = new Map();
+
+startSessionSweeper();
 
 function send(ws, type, payload = {}) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -74,7 +84,27 @@ function buildConnectConfig(host, material) {
 }
 
 function connectShell(ws, resolved) {
+  const sessionId = resolved.ephemeralCredential?.sessionId || resolved.host?.id || resolved.hostId || `${Date.now()}`;
+  const session = createSession({
+    sessionId,
+    userId: resolved.userId,
+    hostId: resolved.host?.id || resolved.hostId || null,
+    credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || null,
+    runtime: resolved.runtime,
+    purpose: resolved.purpose,
+    state: 'connecting',
+    ws,
+    hasClient: true,
+  });
+  let cleaned = false;
+  const cleanupOnce = (reason) => {
+    if (cleaned) return;
+    cleaned = true;
+    cleanupSession(sessionId, reason);
+  };
+
   if (!resolved.ephemeralCredential) {
+    cleanupOnce('credential_unavailable');
     throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
   }
   if (isEphemeralCredentialExpired(resolved.ephemeralCredential)) {
@@ -90,94 +120,77 @@ function connectShell(ws, resolved) {
       result: 'error',
       timestamp: new Date().toISOString(),
     });
+    cleanupOnce('credential_expired');
     throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
   }
 
   const conn = new Client();
   let stream = null;
-  let finished = false;
-  const sessionId = resolved.ephemeralCredential?.sessionId || resolved.host?.id || resolved.hostId || `${Date.now()}`;
-  const sessionStartedAt = new Date().toISOString();
-  const webSocketKeepalive = setInterval(() => {
+  addTimer(sessionId, setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.ping();
-  }, webSocketKeepaliveMs);
-
-  const finish = () => {
-    if (finished) return;
-    finished = true;
-    clearInterval(webSocketKeepalive);
-    stream?.end();
-    conn.end();
-    activeSessions.delete(sessionId);
-  };
-
-  activeSessions.set(sessionId, {
-    sessionId,
-    userId: resolved.userId,
-    hostId: resolved.host?.id || resolved.hostId || null,
-    runtime: resolved.runtime,
-    purpose: resolved.purpose,
-    authType: resolved.authType,
-    client: conn,
-    stream: null,
-    state: 'connecting',
-    createdAt: sessionStartedAt,
-    updatedAt: sessionStartedAt,
-  });
+  }, webSocketKeepaliveMs), 'keepalive');
+  session.conn = conn;
+  session.updatedAt = new Date().toISOString();
 
   ws.on('message', (raw) => {
     try {
+      if (!getSession(sessionId)) return;
       const message = readMessage(raw);
       if (message.type === 'input' && stream && typeof message.data === 'string') {
         stream.write(message.data);
+        touchSession(sessionId);
       }
       if (message.type === 'resize' && stream) {
         const cols = Number(message.cols);
         const rows = Number(message.rows);
         if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
           stream.setWindow(rows, cols, 480, 640);
+          touchSession(sessionId);
         }
+      }
+      if (message.type === 'disconnect') {
+        cleanupOnce('explicit_disconnect');
+        ws.close();
+        return;
+      }
+      if (message.type === 'activity') {
+        touchSession(sessionId);
       }
     } catch (error) {
       send(ws, 'error', { message: error.message });
     }
   });
 
-  ws.once('close', finish);
-  ws.once('error', finish);
+  ws.once('close', () => cleanupOnce('ws_close'));
+  ws.once('error', () => cleanupOnce('ws_error'));
 
   conn.once('ready', () => {
-    const session = activeSessions.get(sessionId);
-    if (session) {
-      session.state = 'ready';
-      session.updatedAt = new Date().toISOString();
-    }
+    if (!getSession(sessionId)) return;
+    updateSession(sessionId, { state: 'connected', connectedAt: new Date().toISOString(), hasClient: true, hasStream: true, stream: null });
     conn.shell({ term: 'xterm-256color' }, (error, shell) => {
       if (error) {
         send(ws, 'error', { message: error.message });
         ws.close();
-        finish();
+        cleanupOnce('shell_error');
         return;
       }
 
       stream = shell;
-      const session = activeSessions.get(sessionId);
-      if (session) {
-        session.stream = shell;
-        session.state = 'active';
-        session.updatedAt = new Date().toISOString();
-      }
+      updateSession(sessionId, { stream: shell, state: 'connected', hasStream: true, hasClient: true, updatedAt: new Date().toISOString() });
       send(ws, 'connected');
-      stream.on('data', (data) => send(ws, 'data', { data: data.toString('utf8') }));
+      stream.on('data', (data) => {
+        touchSession(sessionId);
+        send(ws, 'data', { data: data.toString('utf8') });
+      });
       stream.once('close', () => {
         send(ws, 'closed');
         ws.close();
-        finish();
+        cleanupOnce('stream_close');
       });
       stream.once('error', (streamError) => {
         send(ws, 'error', { message: streamError.message });
         ws.close();
-        finish();
+        cleanupOnce('stream_error');
       });
     });
   });
@@ -195,12 +208,15 @@ function connectShell(ws, resolved) {
       timestamp: new Date().toISOString(),
     });
     ws.close();
-    finish();
+    cleanupOnce('client_error');
   });
   conn.once('end', () => {
     send(ws, 'closed');
     ws.close();
-    finish();
+    cleanupOnce('client_end');
+  });
+  conn.once('close', () => {
+    cleanupOnce('client_close');
   });
 
   const connectConfig = buildConnectConfig(resolved.host, resolved.ephemeralCredential.material);
@@ -218,7 +234,7 @@ function connectShell(ws, resolved) {
     });
     conn.connect(connectConfig);
   } catch (error) {
-    activeSessions.delete(sessionId);
+    cleanupOnce('connect_throw');
     throw error;
   } finally {
     const cleared = resolved.ephemeralCredential.clear();

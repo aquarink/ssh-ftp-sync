@@ -509,3 +509,65 @@ Candidate Scopus search query ideas:
    - security policy
    - architecture documentation
 10. Convert research notes into a formal literature-review and methodology outline for the cloud SSH study.
+
+## Phase 1.4 — Session Cleanup
+
+Phase 1.4 strengthens the runtime lifecycle for SSH/SFTP sessions so session teardown is deterministic and does not leave orphan WebSocket relays, dangling listeners, stale timers, reconnect state, or lingering file-transfer handles.
+
+Relationship to earlier Phase 1 work:
+
+- Smart Identity Engine still decides which identity is eligible for a host/session.
+- Secure Vault still owns secret storage and redaction.
+- Key Isolation still ensures secret material only lives briefly during resolve-then-connect.
+- Session Cleanup adds a separate runtime lifecycle boundary so active sessions are created, tracked, and torn down in a controlled way.
+
+Main files changed in this phase:
+
+- `server/sessionLifecycle.js`
+- `server/sshWebSocket.js`
+- `server/sftpService.js`
+- `server/index.js`
+- `electron/sessionLifecycle.js`
+- `electron/terminalSessionManager.js`
+- `electron/sshHandler.js`
+- `electron/main.js`
+- `src/components/TerminalView.tsx`
+- `src/components/SftpFileManager.tsx`
+- `src/App.tsx`
+- `src/lib/api.ts`
+
+Credential/session lifecycle model:
+
+- Session state moves through creating, resolving_identity, connecting, connected, reconnecting, closing, closed, and failed.
+- Session metadata is kept separate from secret material.
+- Cleanup is idempotent so repeated close triggers do not crash the runtime.
+- A stale-session sweeper removes abandoned pending sessions.
+
+Browser/Electron isolation model:
+
+- Browser relay cleanup is tied to WebSocket lifecycle, shell stream events, and explicit disconnect messages.
+- Electron cleanup is tied to IPC events, terminal tab close, window close, logout, and app quit.
+- Frontend cleanup removes listeners, observers, timers, and terminal instances on unmount.
+
+Limitations:
+
+- JavaScript strings cannot be reliably memory-wiped.
+- Buffer wipe is best-effort only.
+- Live SSH/SFTP verification against a real host is still required.
+
+Next work:
+
+- Phase 1.5 Zero-Trust Access Layer
+- live stress test
+- session persistence and handoff research
+- stronger process isolation
+- native secure memory exploration
+
+Research basis by title:
+
+- SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+- On the Security of SSH Client Signatures
+- Practical Privacy-Preserving Authentication for SSH
+- ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
+- Emerging research areas in SIP-based converged services for extended Web clients
+- Towards SSH3: how HTTP/3 improves secure shells

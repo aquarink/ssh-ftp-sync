@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { BrowserWindow, ipcMain } = require('electron');
 const { Client } = require('ssh2');
 const { runSftpOperation } = require('../server/sftpService');
 const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
@@ -6,6 +6,13 @@ const { TerminalSessionManager } = require('./terminalSessionManager');
 const { resolveIdentity } = require('./identityResolver');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
 const { electronVaultHealthCheck } = require('./vaultHealth');
+const {
+  cleanupAllSessions,
+  cleanupSession,
+  cleanupSessionsByUser,
+  cleanupSessionsByWindowId,
+  getSessionMetrics,
+} = require('./sessionLifecycle');
 const { logIdentityEvent, logVaultEvent } = require('./securityLog');
 
 const terminalSessions = new TerminalSessionManager();
@@ -97,6 +104,7 @@ function testSshConnection(config, resolved) {
 ipcMain.on('ssh-connect', (event, payload) => {
   const { id, userId, hostId, hostUserId, authType, credentialId, purpose } = payload;
   try {
+    const windowId = BrowserWindow.fromWebContents(event.sender)?.id || null;
     const resolved = resolveIdentity({
       userId,
       authenticatedUserId: activeUserId,
@@ -137,7 +145,7 @@ ipcMain.on('ssh-connect', (event, payload) => {
       onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
       onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
       onData: (sessionId, data) => event.reply('ssh-data', { id: sessionId, data }),
-    });
+    }, { windowId });
   } catch (error) {
     event.reply('ssh-error', { id, message: error.message });
     return;
@@ -256,6 +264,29 @@ ipcMain.on('ssh-disconnect', (event, { id }) => {
   terminalSessions.disconnect(id);
 });
 
+ipcMain.handle('session-cleanup-user', async (event, { userId, reason }) => {
+  if (userId) {
+    cleanupSessionsByUser(userId, reason || 'logout');
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('session-cleanup-window', async (event, { windowId, reason }) => {
+  if (windowId !== undefined && windowId !== null) {
+    cleanupSessionsByWindowId(windowId, reason || 'window_close');
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('session-cleanup-all', async (event, { reason }) => {
+  cleanupAllSessions(reason || 'app_quit');
+  return { ok: true };
+});
+
+ipcMain.handle('session-metrics', async () => {
+  return { ok: true, metrics: getSessionMetrics() };
+});
+
 ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }) => {
   const session = terminalSessions.getSessionMetadata(sessionId);
   if (!session) {
@@ -292,6 +323,15 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
         username: session.username,
       },
       credential: resolved.ephemeralCredential,
+      sessionMeta: {
+        sessionId,
+        userId: session.userId,
+        hostId: session.hostId,
+        credentialId: session.credentialId || resolved.credential?.id || null,
+        runtime: 'electron',
+        purpose: 'sftp',
+        sharedSession: true,
+      },
     }, operation, payload || {});
   } catch (error) {
     logIdentityEvent('credentialUsedForPurpose', {
@@ -323,3 +363,12 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
     }
   }
 });
+
+module.exports = {
+  cleanupAllSessions,
+  cleanupSession,
+  cleanupSessionsByUser,
+  cleanupSessionsByWindowId,
+  getSessionMetrics,
+  terminalSessions,
+};

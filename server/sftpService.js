@@ -2,6 +2,15 @@ const path = require('path');
 const { Client } = require('ssh2');
 const AdmZip = require('adm-zip');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
+const {
+  cleanupSession,
+  createSession,
+  getSession,
+  startSessionSweeper,
+  updateSession,
+} = require('./sessionLifecycle');
+
+startSessionSweeper();
 
 const maxTextFileBytes = 2 * 1024 * 1024;
 
@@ -47,17 +56,57 @@ function buildConnectConfig(hostConfig, material) {
 function connectSftp(hostConfig, credential) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
+    const sessionMeta = hostConfig.sessionMeta || null;
+    const existingSession = sessionMeta ? getSession(sessionMeta.sessionId) : null;
+    const ownsSession = Boolean(sessionMeta && !existingSession && sessionMeta.sharedSession !== true);
+    if (ownsSession) {
+      createSession({
+        sessionId: sessionMeta.sessionId,
+        userId: sessionMeta.userId || null,
+        hostId: sessionMeta.hostId || null,
+        credentialId: sessionMeta.credentialId || null,
+        runtime: sessionMeta.runtime || 'browser',
+        purpose: sessionMeta.purpose || 'sftp',
+        state: 'connecting',
+        conn,
+        hasClient: true,
+      });
+    } else if (sessionMeta && existingSession) {
+      updateSession(sessionMeta.sessionId, {
+        sftp: null,
+        state: existingSession.state,
+        lastActivityAt: new Date().toISOString(),
+      });
+    }
     conn.once('ready', () => {
+      if (ownsSession && sessionMeta) {
+        updateSession(sessionMeta.sessionId, {
+          state: 'connected',
+          connectedAt: new Date().toISOString(),
+          hasClient: true,
+          hasStream: true,
+        });
+      }
       conn.sftp((error, sftp) => {
         if (error) {
           conn.end();
+          if (ownsSession && sessionMeta) cleanupSession(sessionMeta.sessionId, 'sftp_ready_error');
           reject(error);
           return;
         }
-        resolve({ conn, sftp });
+        if (ownsSession && sessionMeta) {
+          updateSession(sessionMeta.sessionId, { sftp, stream: null, hasStream: true, hasClient: true });
+        }
+        resolve({ conn, sftp, ownsSession });
       });
     });
-    conn.once('error', reject);
+    conn.once('error', (error) => {
+      if (ownsSession && sessionMeta) cleanupSession(sessionMeta.sessionId, 'sftp_connect_error');
+      reject(error);
+    });
+    conn.once('close', () => {
+      if (ownsSession && sessionMeta) cleanupSession(sessionMeta.sessionId, 'sftp_client_close');
+    });
     conn.connect(buildConnectConfig(hostConfig, credential.material));
   });
 }
@@ -71,10 +120,18 @@ async function withSftp(hostConfig, credential, work) {
     throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
   }
 
-  const { conn, sftp } = await connectSftp(hostConfig, credential);
+  const { conn, sftp, ownsSession } = await connectSftp(hostConfig, credential);
   try {
     return await work(sftp);
   } finally {
+    const sessionId = hostConfig.sessionMeta?.sessionId;
+    if (sessionId) {
+      if (ownsSession) {
+        cleanupSession(sessionId, 'sftp_complete');
+      } else {
+        updateSession(sessionId, { sftp: null, lastActivityAt: new Date().toISOString() });
+      }
+    }
     conn.end();
   }
 }

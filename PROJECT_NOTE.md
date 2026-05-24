@@ -96,3 +96,35 @@
 - Acceptance test result: build/typecheck passed in this environment; live vault health verification and live SSH verification remain pending because the environment does not include a configured target and production vault key.
 - Known limitation: legacy password-host records still exist as compatibility debt, and the Electron renderer trust boundary should be hardened further in a future desktop-session integration pass.
 - Future recommendations: add encrypted backup/export, rotation, admin audit views, and Phase 1.3 key isolation.
+
+## [2026-05-24] - Phase 1.4 - Session Cleanup
+
+- Objective: harden SSH/SFTP session lifecycle cleanup so browser relay sessions, Electron IPC sessions, reconnect attempts, and file-transfer handles are torn down deterministically without leaving orphan resources behind.
+- Implementation summary: added shared session lifecycle helpers for backend and Electron, centralized cleanup paths, stale-session sweeping, metadata-only session metrics, browser unload cleanup, Electron window/app cleanup, and frontend terminal/SFTP unmount disposal.
+- Architectural decision: treat session lifecycle as a separate runtime concern from identity selection and secret storage, with a central cleanup function used by WebSocket, IPC, logout, reconnect, and SFTP flows.
+- Security decision: keep session state metadata-only, make cleanup idempotent, close one tab without affecting other sessions, and keep logging/metrics free of secret material.
+- Research references:
+  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+  - On the Security of SSH Client Signatures
+  - Practical Privacy-Preserving Authentication for SSH
+  - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
+  - Emerging research areas in SIP-based converged services for extended Web clients
+  - Towards SSH3: how HTTP/3 improves secure shells
+- Files changed:
+  - `server/sessionLifecycle.js`
+  - `server/sshWebSocket.js`
+  - `server/sftpService.js`
+  - `server/index.js`
+  - `electron/sessionLifecycle.js`
+  - `electron/terminalSessionManager.js`
+  - `electron/sshHandler.js`
+  - `electron/main.js`
+  - `src/components/TerminalView.tsx`
+  - `src/components/SftpFileManager.tsx`
+  - `src/App.tsx`
+  - `src/lib/api.ts`
+  - `PROJECT_STATE.md`
+  - `README.md`
+- Acceptance test result: build passed via `npm run build`; `npm run lint` is unavailable in this environment because `eslint` is not installed; live SSH/SFTP verification still requires a configured target.
+- Known limitations: live host verification is still required, and cleanup depends on best-effort JavaScript/Node resource teardown semantics.
+- Future recommendations: extend this lifecycle model into Phase 1.5 Zero-Trust Access Layer, add stress testing, and continue hardening process boundaries.

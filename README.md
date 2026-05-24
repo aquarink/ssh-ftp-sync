@@ -248,6 +248,39 @@ This project is still experimental and requires additional security audit before
 - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
 - Towards SSH3: how HTTP/3 improves secure shells
 
+### Research-Guided Security Features
+
+#### Key Isolation
+
+- Ephemeral credential wrapper keeps resolved secret material inside a short-lived runtime object.
+- Resolve-then-connect ensures secrets are only available for the connection attempt that needs them.
+- Long-lived session state stays metadata-only.
+- Secret cleanup is best-effort and runs after connect attempts, failures, and test operations.
+- Reconnect resolves identity again instead of reusing cached secret material.
+- Browser and Electron runtimes use separate secret boundaries so renderer state never receives resolved secrets.
+- Research references:
+  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+  - On the Security of SSH Client Signatures
+  - Practical Privacy-Preserving Authentication for SSH
+  - Enabling Secure Shell Access with OpenID Connect
+  - Towards SSH3: how HTTP/3 improves secure shells
+
+#### Session Cleanup
+
+- Deterministic session lifecycle keeps SSH and SFTP sessions in explicit states.
+- Session maps remain metadata-only and do not store raw credential material.
+- Cleanup is idempotent so duplicate close signals are safe.
+- Browser WebSocket cleanup, Electron IPC cleanup, reconnect cleanup, and SFTP cleanup all flow through a central teardown path.
+- A stale-session sweeper removes abandoned pending sessions.
+- Frontend terminal and file-manager components dispose listeners, timers, and observers on unmount.
+- Research references:
+  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+  - On the Security of SSH Client Signatures
+  - Practical Privacy-Preserving Authentication for SSH
+  - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
+  - Emerging research areas in SIP-based converged services for extended Web clients
+  - Towards SSH3: how HTTP/3 improves secure shells
+
 ### Experimental Features
 
 - Browser SSH relay.

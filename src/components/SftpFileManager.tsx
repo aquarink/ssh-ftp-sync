@@ -83,8 +83,16 @@ export function SftpFileManager({
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'mtime' | 'permissions'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
 
   const parentPath = useMemo(() => dirname(currentPath), [currentPath]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const runSftp = async <T,>(operation: string, payload: Record<string, any>): Promise<T> => {
     if (window.ipcRenderer) {
@@ -101,11 +109,13 @@ export function SftpFileManager({
         onScrollPositionChange(0);
       }
       const result = await runSftp<{ entries?: SftpEntry[] } | SftpEntry[]>('list', { path });
+      if (!mountedRef.current) return;
       const nextEntries = Array.isArray(result) ? result : (result.entries || []);
       setEntries(nextEntries);
       setCurrentPath(path);
       setSelected(null);
       requestAnimationFrame(() => {
+        if (!mountedRef.current) return;
         if (scrollContainerRef.current) {
           scrollContainerRef.current.scrollTop = path === currentPath ? scrollPosition : 0;
         }
@@ -132,6 +142,7 @@ export function SftpFileManager({
     setNotice('');
     try {
       await runSftp(operation, payload);
+      if (!mountedRef.current) return;
       setNotice(label);
       if (reload) await refresh();
     } catch (err: any) {
@@ -182,6 +193,7 @@ export function SftpFileManager({
     setError('');
     try {
       const result = await runSftp<{ content: string }>('read', { path: selected.path });
+      if (!mountedRef.current) return;
       setEditorPath(selected.path);
       setEditorValue(result.content);
     } catch (err: any) {
@@ -204,8 +216,10 @@ export function SftpFileManager({
         const file = files[index];
         const relativePath = (file as any).webkitRelativePath || file.name;
         await runSftp('upload', { path: joinPath(currentPath, relativePath), data: await fileToBase64(file) });
+        if (!mountedRef.current) return;
         setProgress({ label: `Uploading ${file.name}`, value: Math.round(((index + 1) / files.length) * 100) });
       }
+      if (!mountedRef.current) return;
       setNotice('Upload complete');
       await refresh();
     } catch (err: any) {
@@ -221,6 +235,7 @@ export function SftpFileManager({
     setProgress({ label: `Downloading ${selected.name}`, value: null });
     try {
       const result = await runSftp<{ name: string; data: string }>('download', { path: selected.path });
+      if (!mountedRef.current) return;
       downloadBase64(result.name, result.data);
     } catch (err: any) {
       setError(err.message || 'Download failed');

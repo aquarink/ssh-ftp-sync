@@ -1,6 +1,8 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 
+let sshLifecycle = null;
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1100,
@@ -19,18 +21,28 @@ function createWindow() {
     win.loadURL('http://localhost:5173');
     win.webContents.openDevTools();
   }
+
+  win.on('close', () => {
+    sshLifecycle?.cleanupSessionsByWindowId?.(win.id, 'window_close');
+  });
+
+  return win;
 }
 
 app.whenReady().then(() => {
   createWindow();
 
   // Initialize SSH handler
-  require('./sshHandler');
+  sshLifecycle = require('./sshHandler');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
+  });
+
+  app.on('before-quit', () => {
+    sshLifecycle?.cleanupAllSessions?.('app_quit');
   });
 });
 

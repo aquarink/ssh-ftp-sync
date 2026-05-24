@@ -32,6 +32,7 @@ function App() {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [credentials, setCredentials] = useState<SshCredential[]>([]);
   const [sshTabs, setSshTabs] = useState<SshTab[]>([]);
+  const sshTabsRef = useRef<SshTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [isAddingHost, setIsAddingHost] = useState(false);
   const [editingHost, setEditingHost] = useState<Host | null>(null);
@@ -143,6 +144,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('terminalFontSize', String(terminalFontSize));
   }, [terminalFontSize]);
+
+  useEffect(() => {
+    sshTabsRef.current = sshTabs;
+  }, [sshTabs]);
 
   useEffect(() => {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth);
@@ -370,6 +375,22 @@ function App() {
   }, [session?.user.id]);
 
   useEffect(() => {
+    const cleanupTabs = () => {
+      sshTabsRef.current.forEach(tab => {
+        window.ipcRenderer?.send('ssh-disconnect', { id: tab.id });
+      });
+    };
+
+    window.addEventListener('beforeunload', cleanupTabs);
+    window.addEventListener('pagehide', cleanupTabs);
+    return () => {
+      window.removeEventListener('beforeunload', cleanupTabs);
+      window.removeEventListener('pagehide', cleanupTabs);
+      cleanupTabs();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!window.ipcRenderer) return;
 
     const onConnected = (_: any, { id }: { id: string }) => {
@@ -437,7 +458,9 @@ function App() {
 
   const handleLogout = async () => {
     if (window.ipcRenderer) {
-      sshTabs.forEach(tab => window.ipcRenderer.send('ssh-disconnect', { id: tab.id }));
+      await window.ipcRenderer.invoke('session-cleanup-user', { userId: session?.user.id, reason: 'logout' }).catch((err) => {
+        console.error('Failed to cleanup desktop sessions during logout:', err.message);
+      });
       await window.ipcRenderer.invoke('session-context-clear', {});
     }
     await api.logout();
