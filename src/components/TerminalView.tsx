@@ -17,6 +17,7 @@ interface TerminalViewProps {
   active: boolean;
   fontSize: number;
   bottomPaddingPx?: number;
+  showQuickActions?: boolean;
   onConnected?: () => void;
   onError?: (message: string) => void;
   onClosed?: () => void;
@@ -40,6 +41,7 @@ export function TerminalView({
   active,
   fontSize,
   bottomPaddingPx = 24,
+  showQuickActions = false,
   onConnected,
   onError,
   onClosed,
@@ -285,14 +287,38 @@ export function TerminalView({
     }
   };
 
-  const handleCopy = () => {
-    if (!term.current) return;
+  const getCopyText = () => {
+    if (!term.current) return '';
+
     const selectedText = term.current.getSelection();
     if (selectedText) {
-      navigator.clipboard.writeText(selectedText);
+      return selectedText;
+    }
+
+    const buffer = term.current.buffer.active;
+    const start = buffer.viewportY;
+    const end = Math.min(buffer.viewportY + term.current.rows - 1, buffer.length - 1);
+    const lines: string[] = [];
+
+    for (let index = start; index <= end; index += 1) {
+      const line = buffer.getLine(index);
+      if (line) lines.push(line.translateToString(true));
+    }
+
+    return lines.join('\n').trimEnd();
+  };
+
+  const handleCopy = async () => {
+    const text = getCopyText();
+    if (text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (err) {
+        console.error('Failed to write clipboard:', err);
+      }
     }
     setContextMenu(null);
-    term.current.focus();
+    term.current?.focus();
   };
 
   const handlePaste = () => {
@@ -314,9 +340,31 @@ export function TerminalView({
       className="relative w-full h-full"
       onContextMenu={handleContextMenu}
     >
+      {showQuickActions && (
+        <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-lg border border-border/70 bg-[#0d1117]/90 p-1 shadow-lg backdrop-blur pointer-events-auto">
+          <button
+            type="button"
+            onClick={handleCopy}
+            title={term.current?.hasSelection() ? 'Copy selected text' : 'Copy visible terminal text'}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-white hover:bg-white/10 transition cursor-pointer"
+          >
+            <Copy size={13} />
+            Copy
+          </button>
+          <button
+            type="button"
+            onClick={handlePaste}
+            title="Paste clipboard text"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-white hover:bg-white/10 transition cursor-pointer"
+          >
+            <Clipboard size={13} />
+            Paste
+          </button>
+        </div>
+      )}
       <div
         ref={terminalRef}
-        className="terminal-shell w-full h-full px-3 pt-3 pb-4"
+        className="terminal-shell w-full h-full px-4 md:px-5 pt-3 pb-4 overflow-hidden"
         style={{
           '--terminal-bottom-padding': `${bottomPaddingPx}px`,
           '--terminal-background': '#0d1117',
@@ -334,7 +382,7 @@ export function TerminalView({
         >
           <button
             onClick={handleCopy}
-            disabled={!hasSelection}
+            disabled={!hasSelection && !getCopyText()}
             className="w-full text-left px-4 py-2 hover:bg-slate-800 disabled:opacity-50 disabled:hover:bg-transparent flex items-center justify-between transition-colors duration-150"
           >
             <span className="flex items-center gap-2">

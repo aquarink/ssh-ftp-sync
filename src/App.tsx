@@ -120,7 +120,8 @@ function App() {
     setRoute(path);
   };
 
-  const isTabletViewport = viewportWidth < 1280;
+  const isTabletViewport = viewportWidth >= 768 && viewportWidth < 1280;
+  const isMobileViewport = viewportWidth < 768;
   const isHostSidebarExpanded = !leftSidebarCollapsed && (leftSidebarPinned || isHostSidebarHovered || isTabletViewport);
 
   useEffect(() => {
@@ -182,6 +183,10 @@ function App() {
   const zoomInTerminal = () => setTerminalFontSize(value => clampTerminalFontSize(value + 1));
   const zoomOutTerminal = () => setTerminalFontSize(value => clampTerminalFontSize(value - 1));
   const resetTerminalZoom = () => setTerminalFontSize(DEFAULT_TERMINAL_FONT_SIZE);
+  const tabletPanelWidth = Math.max(
+    320,
+    Math.min(rightPanelWidth, Math.min(420, Math.round(viewportWidth * 0.4)))
+  );
 
   // Mouse drag handlers for resizing panels
   const startLeftResize = (e: React.MouseEvent) => {
@@ -1079,7 +1084,10 @@ function App() {
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 flex flex-col xl:flex-row relative overflow-hidden">
+            <div
+              className="flex-1 min-h-0 flex flex-col xl:flex-row relative overflow-hidden"
+              style={isTabletViewport && rightPanelVisible ? { paddingRight: `${tabletPanelWidth + 12}px` } : undefined}
+            >
               {/* Terminal View */}
               <div className="flex-1 relative bg-black min-w-0 min-h-[52vh] xl:min-h-0">
                 {sshTabs.map(tab => (
@@ -1105,7 +1113,8 @@ function App() {
                       host={tab.host}
                       active={activeTabId === tab.id}
                       fontSize={terminalFontSize}
-                      bottomPaddingPx={isTabletViewport ? 36 : DEFAULT_TERMINAL_BOTTOM_PADDING_PX}
+                      bottomPaddingPx={isTabletViewport ? 40 : DEFAULT_TERMINAL_BOTTOM_PADDING_PX}
+                      showQuickActions={isTabletViewport || isMobileViewport}
                       onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '' })}
                       onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message })}
                       onClosed={() => updateTab(tab.id, { status: 'closed', errorMsg: 'SSH connection closed. Reconnect from the host list to open a new shell.' })}
@@ -1127,15 +1136,21 @@ function App() {
               {/* FTP/SFTP Panel */}
               {rightPanelVisible ? (
                 <div
-                  style={isTabletViewport ? undefined : { width: `${rightPanelWidth}px` }}
+                  style={
+                    isTabletViewport
+                      ? { width: `${tabletPanelWidth}px` }
+                      : { width: `${rightPanelWidth}px` }
+                  }
                   className={`min-h-0 shrink-0 flex flex-col z-30 bg-[#161b22] overflow-hidden ${
                     isTabletViewport
-                      ? 'w-full h-[38vh] max-h-[420px] border-t border-border'
-                      : `h-full ${
-                          !rightPanelPinned
-                            ? 'absolute right-0 top-0 bottom-0 shadow-2xl border-l border-border'
-                            : 'border-l border-border relative'
-                        }`
+                      ? 'absolute right-3 top-3 bottom-3 h-auto max-h-none rounded-2xl border border-border shadow-2xl ring-1 ring-white/5 backdrop-blur-sm'
+                      : isMobileViewport
+                        ? 'w-full h-[38vh] max-h-[420px] border-t border-border'
+                        : `h-full ${
+                            !rightPanelPinned
+                              ? 'absolute right-0 top-0 bottom-0 shadow-2xl border-l border-border'
+                              : 'border-l border-border relative'
+                          }`
                   }`}
                 >
                   <SftpFileManager
