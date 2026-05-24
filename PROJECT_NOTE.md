@@ -128,3 +128,35 @@
 - Acceptance test result: build passed via `npm run build`; `npm run lint` is unavailable in this environment because `eslint` is not installed; live SSH/SFTP verification still requires a configured target.
 - Known limitations: live host verification is still required, and cleanup depends on best-effort JavaScript/Node resource teardown semantics.
 - Future recommendations: extend this lifecycle model into Phase 1.5 Zero-Trust Access Layer, add stress testing, and continue hardening process boundaries.
+
+## [2026-05-24] - Phase 1.5 - Lightweight Zero-Trust Access Layer
+
+- Objective: add a lightweight zero-trust access boundary for SSH/SFTP runtime connects so browser relay and Electron IPC sessions require short-lived, scoped authorization before identity resolution and connection.
+- Implementation summary: added connect-token issuance and one-time consumption, runtime policy validation, browser WebSocket token enforcement, Electron token consumption via local API validation, SFTP authorization gating, metadata-only security metrics, and lightweight rate limiting.
+- Architectural decision: separate access governance from identity selection, secret storage, key isolation, and session cleanup so the authorization boundary can remain small and runtime-aware.
+- Security decision: no direct hostId-only connect, short-lived token, one-time token, runtime-aware policy, reconnect requires new token, metadata-only logging/metrics, and no token persistence in localStorage.
+- Research references:
+  - Brute-force attack mitigation on remote access services via software-defined perimeter
+  - Enabling Secure Shell Access with OpenID Connect
+  - Practical Privacy-Preserving Authentication for SSH
+  - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
+  - Towards SSH3: how HTTP/3 improves secure shells
+  - Emerging research areas in SIP-based converged services for extended Web clients
+- Files changed:
+  - `server/accessPolicy.js`
+  - `server/connectToken.js`
+  - `server/runtimePolicy.js`
+  - `server/securityMetrics.js`
+  - `server/index.js`
+  - `server/sshWebSocket.js`
+  - `server/securityLog.js`
+  - `electron/sshHandler.js`
+  - `src/App.tsx`
+  - `src/components/TerminalView.tsx`
+  - `src/components/SftpFileManager.tsx`
+  - `src/lib/api.ts`
+  - `PROJECT_STATE.md`
+  - `README.md`
+- Acceptance test result: build/typecheck and live SSH verification were not yet re-run at the time of this note; live target availability remains required for full end-to-end confirmation.
+- Known limitations: this is a lightweight access layer rather than a full SDP/ZTNA platform, browser/Electron policy remains metadata-driven, and live target validation still depends on configured SSH hosts.
+- Future recommendations: SDP gateway, federated identity, adaptive policy, eBPF observability, distributed access control, and tighter lifecycle coupling for future session handoff workflows.

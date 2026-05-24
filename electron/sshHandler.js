@@ -18,6 +18,22 @@ const { logIdentityEvent, logVaultEvent } = require('./securityLog');
 const terminalSessions = new TerminalSessionManager();
 let activeUserId = null;
 // TODO(security): prefer authenticated app/session context over renderer-supplied userId whenever the desktop shell can derive it directly.
+const apiPort = Number(process.env.API_PORT || 8790);
+
+async function consumeConnectToken(payload) {
+  const response = await fetch(`http://127.0.0.1:${apiPort}/api/security/connect-token/consume`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw Object.assign(new Error(data.error || data.message || 'Connect authorization failed'), { status: response.status });
+  }
+  return data;
+}
 
 function resolveDesktopUserId(rendererUserId) {
   const effectiveUserId = activeUserId || rendererUserId;
@@ -102,54 +118,67 @@ function testSshConnection(config, resolved) {
 }
 
 ipcMain.on('ssh-connect', (event, payload) => {
-  const { id, userId, hostId, hostUserId, authType, credentialId, purpose } = payload;
-  try {
-    const windowId = BrowserWindow.fromWebContents(event.sender)?.id || null;
-    const resolved = resolveIdentity({
-      userId,
-      authenticatedUserId: activeUserId,
-      hostId,
-      hostUserId,
-      runtime: 'electron',
-      authType,
-      credentialId,
-      purpose: purpose || 'ssh',
-      sessionId: id,
-    });
+  void (async () => {
+    const { id, userId, hostId, authType, credentialId, purpose, connectToken } = payload;
+    let authorization = null;
+    let resolved = null;
+    try {
+      const windowId = BrowserWindow.fromWebContents(event.sender)?.id || null;
+      const effectiveUserId = resolveDesktopUserId(userId);
+      authorization = await consumeConnectToken({
+        userId: effectiveUserId,
+        hostId,
+        runtime: 'electron',
+        purpose: purpose || 'ssh',
+        authType: authType || null,
+        credentialId: credentialId || null,
+        connectToken,
+      });
+      resolved = resolveIdentity({
+        userId: effectiveUserId,
+        authenticatedUserId: activeUserId,
+        hostId,
+        hostUserId: effectiveUserId,
+        runtime: 'electron',
+        authType: authorization.authType || authType,
+        credentialId: authorization.credentialId || credentialId,
+        purpose: authorization.purpose || purpose || 'ssh',
+        sessionId: id,
+      });
 
-    logIdentityEvent('credentialUsedForPurpose', {
-      userId: resolved.userId,
-      hostId,
-      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || credentialId,
-      sessionId: id,
-      authType: resolved.authType,
-      runtime: 'electron',
-      purpose: purpose || 'ssh',
-      result: 'ok',
-      timestamp: new Date().toISOString(),
-    });
+      logIdentityEvent('credentialUsedForPurpose', {
+        userId: resolved.userId,
+        hostId,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || authorization.credentialId || credentialId,
+        sessionId: id,
+        authType: resolved.authType,
+        runtime: 'electron',
+        purpose: authorization.purpose || purpose || 'ssh',
+        result: 'ok',
+        timestamp: new Date().toISOString(),
+      });
 
-    terminalSessions.connect(id, {
-      userId: resolved.userId,
-      hostId,
-      hostUserId: resolved.userId,
-      host: payload.host,
-      port: payload.port,
-      username: payload.username,
-      authType: resolved.authType,
-      credentialId: resolved.credential?.id || credentialId,
-      runtime: 'electron',
-      purpose: purpose || 'ssh',
-    }, resolved.ephemeralCredential, {
-      onConnected: (sessionId) => event.reply('ssh-connected', { id: sessionId }),
-      onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
-      onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
-      onData: (sessionId, data) => event.reply('ssh-data', { id: sessionId, data }),
-    }, { windowId });
-  } catch (error) {
-    event.reply('ssh-error', { id, message: error.message });
-    return;
-  }
+      terminalSessions.connect(id, {
+        userId: resolved.userId,
+        hostId,
+        hostUserId: resolved.userId,
+        host: payload.host,
+        port: payload.port,
+        username: payload.username,
+        authType: resolved.authType,
+        credentialId: resolved.credential?.id || authorization.credentialId || credentialId,
+        runtime: 'electron',
+        purpose: authorization.purpose || purpose || 'ssh',
+      }, resolved.ephemeralCredential, {
+        onConnected: (sessionId) => event.reply('ssh-connected', { id: sessionId }),
+        onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
+        onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
+        onData: (sessionId, data) => event.reply('ssh-data', { id: sessionId, data }),
+      }, { windowId });
+    } catch (error) {
+      event.reply('ssh-error', { id, message: error.message });
+    }
+  })();
 });
 
 ipcMain.handle('session-context-set', async (event, { userId }) => {
@@ -292,26 +321,37 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
   if (!session) {
     throw new Error('SFTP session is not available. Connect the SSH tab first.');
   }
-  const resolved = resolveIdentity({
-    userId: session.userId,
-    authenticatedUserId: activeUserId,
-    hostId: session.hostId,
-    hostUserId: session.userId,
-    runtime: 'electron',
-    authType: session.authType,
-    credentialId: session.credentialId,
-    purpose: 'sftp',
-    sessionId,
-  });
+  let authorization = null;
+  let resolved = null;
 
   try {
+    authorization = await consumeConnectToken({
+      userId: session.userId,
+      hostId: session.hostId,
+      runtime: 'electron',
+      purpose: 'sftp',
+      authType: session.authType || null,
+      credentialId: session.credentialId || null,
+      connectToken: payload?.connectToken,
+    });
+    resolved = resolveIdentity({
+      userId: session.userId,
+      authenticatedUserId: activeUserId,
+      hostId: session.hostId,
+      hostUserId: session.userId,
+      runtime: 'electron',
+      authType: authorization.authType || session.authType,
+      credentialId: authorization.credentialId || session.credentialId,
+      purpose: authorization.purpose || 'sftp',
+      sessionId,
+    });
     logIdentityEvent('credentialUsedForPurpose', {
       userId: resolved.userId,
       hostId: session.hostId,
-      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || session.credentialId,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || authorization.credentialId || session.credentialId,
       sessionId,
       runtime: 'electron',
-      purpose: 'sftp',
+      purpose: authorization.purpose || 'sftp',
       authType: resolved.authType,
       result: 'ok',
       timestamp: new Date().toISOString(),
@@ -327,27 +367,27 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
         sessionId,
         userId: session.userId,
         hostId: session.hostId,
-        credentialId: session.credentialId || resolved.credential?.id || null,
+        credentialId: authorization.credentialId || session.credentialId || resolved.credential?.id || null,
         runtime: 'electron',
-        purpose: 'sftp',
+        purpose: authorization.purpose || 'sftp',
         sharedSession: true,
       },
     }, operation, payload || {});
   } catch (error) {
     logIdentityEvent('credentialUsedForPurpose', {
-      userId: resolved.userId,
+      userId: resolved?.userId || session.userId,
       hostId: session.hostId,
-      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || session.credentialId,
+      credentialId: resolved?.credential?.id || resolved?.ephemeralCredential?.id || authorization?.credentialId || session.credentialId,
       sessionId,
       runtime: 'electron',
-      purpose: 'sftp',
-      authType: resolved.authType,
+      purpose: authorization?.purpose || 'sftp',
+      authType: resolved?.authType || authorization?.authType || null,
       result: 'error',
       timestamp: new Date().toISOString(),
     });
     throw error;
   } finally {
-    if (resolved.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
+    if (resolved?.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
       const cleared = resolved.ephemeralCredential.clear();
       logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
         userId: resolved.userId,
@@ -355,7 +395,7 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
         credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
         sessionId,
         runtime: resolved.runtime,
-        purpose: 'sftp',
+        purpose: authorization?.purpose || 'sftp',
         authType: resolved.authType,
         result: cleared ? 'ok' : 'error',
         timestamp: new Date().toISOString(),

@@ -7,6 +7,7 @@ import 'xterm/css/xterm.css';
 interface TerminalViewProps {
   sessionId: string;
   hostId: string;
+  connectToken: string;
   host?: {
     userId?: string;
     host: string;
@@ -22,6 +23,7 @@ interface TerminalViewProps {
   onConnected?: () => void;
   onError?: (message: string) => void;
   onClosed?: () => void;
+  onConnectTokenConsumed?: () => void;
 }
 
 type SshSocketMessage = {
@@ -38,6 +40,7 @@ function sshSocketUrl(hostId: string, sessionId: string) {
 export function TerminalView({
   sessionId,
   hostId,
+  connectToken,
   host,
   active,
   fontSize,
@@ -46,12 +49,14 @@ export function TerminalView({
   onConnected,
   onError,
   onClosed,
+  onConnectTokenConsumed,
 }: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
   const inputDisposable = useRef<{ dispose: () => void } | null>(null);
+  const inputSendRef = useRef<(data: string) => void>(() => {});
   const activeRef = useRef(active);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -73,6 +78,10 @@ export function TerminalView({
 
   useEffect(() => {
     if (!terminalRef.current) return;
+    if (!connectToken) {
+      onError?.('Connect authorization unavailable');
+      return;
+    }
 
     // Initialize xterm.js
     term.current = new Terminal({
@@ -123,13 +132,7 @@ export function TerminalView({
       }
 
       if (isPaste) {
-        navigator.clipboard.readText().then((text) => {
-          if (text) {
-            terminal.paste(text);
-          }
-        }).catch((err) => {
-          console.error('Failed to read clipboard:', err);
-        });
+        // Prevent duplicate paste forwarding between xterm and custom handlers.
         return false;
       }
 
@@ -137,6 +140,32 @@ export function TerminalView({
     });
     let socket: WebSocket | null = null;
     let socketFailed = false;
+    let consumeTokenTimer: number | null = null;
+
+    const sendTerminalInput = (data: string) => {
+      if (window.ipcRenderer) {
+        window.ipcRenderer.send('ssh-input', { id: sessionId, data });
+      }
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'input', data }));
+      }
+    };
+    inputSendRef.current = sendTerminalInput;
+
+    const pasteText = (text: string) => {
+      if (!text) return;
+      sendTerminalInput(text);
+    };
+
+    const handlePasteEvent = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pasteText(text);
+    };
+
+    terminalRef.current.addEventListener('paste', handlePasteEvent, true);
 
     if (window.ipcRenderer && host) {
       window.ipcRenderer.send('ssh-connect', {
@@ -149,12 +178,15 @@ export function TerminalView({
         username: host.username,
         authType: host.authType,
         credentialId: host.credentialId,
+        connectToken,
         purpose: 'ssh',
       });
+      consumeTokenTimer = window.setTimeout(() => onConnectTokenConsumed?.(), 0);
     }
 
     if (!window.ipcRenderer) {
       const socketUrl = new URL(sshSocketUrl(hostId, sessionId));
+      socketUrl.searchParams.set('connectToken', connectToken);
       if (host?.credentialId) socketUrl.searchParams.set('credentialId', host.credentialId);
       if (host?.authType) socketUrl.searchParams.set('authType', host.authType);
       socketUrl.searchParams.set('purpose', 'ssh');
@@ -181,16 +213,12 @@ export function TerminalView({
       socket.onclose = () => {
         if (!socketFailed) onClosed?.();
       };
+      consumeTokenTimer = window.setTimeout(() => onConnectTokenConsumed?.(), 0);
     }
 
     // Listen to input from the user (typing)
     inputDisposable.current = term.current.onData((data) => {
-      if (window.ipcRenderer) {
-        window.ipcRenderer.send('ssh-input', { id: sessionId, data });
-      }
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'input', data }));
-      }
+      sendTerminalInput(data);
     });
 
     // Listen to resize
@@ -237,8 +265,12 @@ export function TerminalView({
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
+      terminalRef.current?.removeEventListener('paste', handlePasteEvent, true);
       inputDisposable.current?.dispose?.();
       inputDisposable.current = null;
+      if (consumeTokenTimer) {
+        window.clearTimeout(consumeTokenTimer);
+      }
       if (window.ipcRenderer) {
         window.ipcRenderer.send('ssh-disconnect', { id: sessionId });
         window.ipcRenderer.removeListener('ssh-data', onData);
@@ -248,6 +280,7 @@ export function TerminalView({
       }
       socket?.close();
       fitAddon.current = null;
+      inputSendRef.current = () => {};
       term.current?.dispose();
       term.current = null;
     };
@@ -342,8 +375,8 @@ export function TerminalView({
   const handlePaste = () => {
     if (!term.current) return;
     navigator.clipboard.readText().then((text) => {
-      if (text && term.current) {
-        term.current.paste(text);
+      if (text) {
+        inputSendRef.current(text);
       }
     }).catch((err) => {
       console.error('Failed to read clipboard:', err);

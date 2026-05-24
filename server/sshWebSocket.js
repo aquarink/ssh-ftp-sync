@@ -3,6 +3,7 @@ const { WebSocket, WebSocketServer } = require('ws');
 const { getSessionUser } = require('./auth');
 const { resolveIdentity } = require('./identityResolver');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
+const { authorizeConnectRequest } = require('./accessPolicy');
 const {
   addTimer,
   cleanupSession,
@@ -36,25 +37,34 @@ function rejectUpgrade(socket, status, message) {
   socket.destroy();
 }
 
-async function getUserHost(req, url) {
+async function getAuthorizedConnection(req, url) {
   const user = await getSessionUser(req);
   if (!user) throw Object.assign(new Error('Authentication required'), { status: 401 });
 
   const hostId = url.searchParams.get('hostId');
   if (!hostId) throw Object.assign(new Error('Host is required'), { status: 400 });
+  const connectToken = url.searchParams.get('connectToken');
   const credentialId = url.searchParams.get('credentialId') || null;
   const authType = url.searchParams.get('authType') || null;
   const purpose = url.searchParams.get('purpose') || 'ssh';
-  const resolved = await resolveIdentity({
-    userId: user.id,
+  const authorization = await authorizeConnectRequest(user.id, {
     hostId,
     runtime: 'browser',
     authType,
     credentialId,
     purpose,
+    connectToken,
+  });
+  const resolved = await resolveIdentity({
+    userId: user.id,
+    hostId: authorization.host.id,
+    runtime: authorization.runtime,
+    authType: authorization.authType,
+    credentialId: authorization.credentialId,
+    purpose: authorization.purpose,
     sessionId: url.searchParams.get('sessionId') || null,
   });
-  return resolved;
+  return { ...resolved, host: authorization.host };
 }
 
 function readMessage(raw) {
@@ -262,7 +272,7 @@ function attachSshWebSocket(server) {
       return;
     }
 
-    getUserHost(req, url)
+    getAuthorizedConnection(req, url)
       .then((resolved) => {
         wss.handleUpgrade(req, socket, head, (ws) => {
           try {

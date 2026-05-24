@@ -14,6 +14,7 @@ interface SshTab {
   name: string;
   hostname: string;
   host: Host;
+  connectToken: string;
   status: SshTabStatus;
   errorMsg?: string;
 }
@@ -628,18 +629,31 @@ function App() {
     }
   };
 
-  const connectToHost = (host: Host) => {
-    const tabId = crypto.randomUUID();
-    const tab: SshTab = {
-      id: tabId,
-      hostId: host.id,
-      name: host.name,
-      hostname: host.host,
-      host,
-      status: 'connecting',
-    };
-    setSshTabs(tabs => [...tabs, tab]);
-    setActiveTabId(tabId);
+  const connectToHost = async (host: Host) => {
+    try {
+      const tabId = crypto.randomUUID();
+      const runtime = window.ipcRenderer ? 'electron' : 'browser';
+      const tokenResponse = await api.requestConnectToken({
+        hostId: host.id,
+        runtime,
+        purpose: 'ssh',
+        authType: host.authType || null,
+        credentialId: host.credentialId || null,
+      });
+      const tab: SshTab = {
+        id: tabId,
+        hostId: host.id,
+        name: host.name,
+        hostname: host.host,
+        host,
+        connectToken: tokenResponse.token,
+        status: 'connecting',
+      };
+      setSshTabs(tabs => [...tabs, tab]);
+      setActiveTabId(tabId);
+    } catch (error: any) {
+      alert(error.message || 'Unable to authorize SSH connect');
+    }
   };
 
   const closeTab = (tabId: string) => {
@@ -937,7 +951,7 @@ function App() {
               return (
                 <div 
                   key={h.id} 
-                  onClick={() => connectToHost(h)}
+                  onClick={() => { void connectToHost(h); }}
                   title={`${h.name} - ${h.username}@${h.host}:${h.port}`}
                   aria-label={`Connect to ${h.name}, ${h.username} at ${h.host} port ${h.port}, ${h.authType || 'password'} authentication, ${status} status`}
                   aria-describedby={tooltipId}
@@ -964,7 +978,7 @@ function App() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            connectToHost(h);
+                            void connectToHost(h);
                           }}
                           className="p-1 hover:bg-white/10 rounded text-textMuted hover:text-primary transition"
                           title="Connect"
@@ -1136,6 +1150,7 @@ function App() {
                     <TerminalView
                       sessionId={tab.id}
                       hostId={tab.hostId}
+                      connectToken={tab.connectToken}
                       host={tab.host}
                       active={activeTabId === tab.id}
                       fontSize={terminalFontSize}
@@ -1144,6 +1159,7 @@ function App() {
                       onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '' })}
                       onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message })}
                       onClosed={() => updateTab(tab.id, { status: 'closed', errorMsg: 'SSH connection closed. Reconnect from the host list to open a new shell.' })}
+                      onConnectTokenConsumed={() => updateTab(tab.id, { connectToken: '' })}
                     />
                   </div>
                 ))}

@@ -44,6 +44,21 @@ export interface SessionMetrics {
   cleanupErrors: number;
 }
 
+export interface ConnectTokenResponse {
+  token: string;
+  tokenId: string;
+  expiresAt: string;
+  scope: {
+    userId: string | null;
+    hostId: string | null;
+    identityId: string | null;
+    credentialId: string | null;
+    runtime: 'browser' | 'electron';
+    purpose: string;
+    authType: string | null;
+  };
+}
+
 export interface ManagedUser extends User {
   createdAt: string;
   emailCheckResult?: string | null;
@@ -225,6 +240,18 @@ export const api = {
     }>('/api/security/vault-health'),
   sessionMetrics: () =>
     request<{ ok: true; metrics: SessionMetrics }>('/api/security/session-metrics'),
+  securityMetrics: () =>
+    request<{ ok: true; metrics: Record<string, number> }>('/api/security/access-metrics'),
+  requestConnectToken: (payload: { hostId: string; runtime: 'browser' | 'electron'; purpose: string; authType?: string | null; credentialId?: string | null }) =>
+    request<ConnectTokenResponse>('/api/security/connect-token', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  consumeConnectToken: (payload: { userId: string; hostId: string; runtime: 'browser' | 'electron'; purpose: string; authType?: string | null; credentialId?: string | null; connectToken: string }) =>
+    request<{ ok: true; hostId: string; runtime: 'browser' | 'electron'; purpose: string; authType: string | null; credentialId: string | null; connectTokenId: string }>('/api/security/connect-token/consume', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   sftpOperation: <T = any>(hostId: string, operation: string, payload: Record<string, any>) =>
     request<T>(`/api/hosts/${encodeURIComponent(hostId)}/sftp/${encodeURIComponent(operation)}`, {
       method: 'POST',

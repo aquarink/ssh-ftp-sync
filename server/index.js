@@ -19,6 +19,14 @@ const { resolveIdentity } = require('./identityResolver');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
 const { cleanupSessionsByUser, getSessionMetrics } = require('./sessionLifecycle');
 const { vaultHealthCheck } = require('./vaultHealth');
+const {
+  authorizeConnectRequest,
+  issueConnectAuthorization,
+  invalidateConnectAuthorizationsByHost,
+  invalidateConnectAuthorizationsByIdentity,
+  invalidateConnectAuthorizationsByUser,
+} = require('./accessPolicy');
+const { getSecurityMetrics } = require('./securityMetrics');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
 const {
   removeCredentialSecret,
@@ -378,6 +386,7 @@ async function updateHost(req, res, id) {
       WHERE id = ? AND user_id = ?`,
     [host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags, id, user.id]
   );
+  invalidateConnectAuthorizationsByHost(user.id, id, 'host_updated');
 
   const [rows] = await pool.execute(
     `SELECT id, user_id AS userId, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
@@ -568,6 +577,7 @@ async function deleteIdentity(req, res, id) {
   if (!rows[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
   removeCredentialSecret(rows[0].storage_ref);
   await pool.execute('DELETE FROM ssh_credentials WHERE id = ? AND user_id = ?', [id, user.id]);
+  invalidateConnectAuthorizationsByIdentity(user.id, id, 'identity_deleted');
   logIdentityEvent('delete', {
     userId: user.id,
     credentialId: id,
@@ -594,6 +604,7 @@ async function assignIdentityToHost(req, res, hostId) {
     'UPDATE hosts SET auth_type = ?, credential_id = ?, password = \'\' WHERE id = ? AND user_id = ?',
     [authType, identityId, hostId, user.id]
   );
+  invalidateConnectAuthorizationsByHost(user.id, hostId, 'host_identity_changed');
   logIdentityEvent('assign', {
     userId: user.id,
     hostId,
@@ -748,25 +759,34 @@ async function deleteHost(req, res, id) {
   if (!user) return;
 
   await pool.execute('DELETE FROM hosts WHERE id = ? AND user_id = ?', [id, user.id]);
+  invalidateConnectAuthorizationsByHost(user.id, id, 'host_deleted');
   json(res, 200, { ok: true });
-}
-
-async function getUserHost(userId, hostId) {
-  return resolveIdentity({
-    userId,
-    hostId,
-    runtime: 'browser',
-    purpose: 'sftp',
-  });
 }
 
 async function sftpOperation(req, res, hostId, operation) {
   const user = await requireUser(req, res);
   if (!user) return;
 
-  const resolved = await getUserHost(user.id, hostId);
   const payload = await readJson(req);
+  let authorization = null;
+  let resolved = null;
   try {
+    authorization = await authorizeConnectRequest(user.id, {
+      hostId,
+      runtime: 'browser',
+      purpose: 'sftp',
+      authType: payload.authType || null,
+      credentialId: payload.credentialId || null,
+      connectToken: payload.connectToken || null,
+    });
+    resolved = await resolveIdentity({
+      userId: user.id,
+      hostId: authorization.host.id,
+      runtime: authorization.runtime,
+      authType: authorization.authType,
+      credentialId: authorization.credentialId,
+      purpose: authorization.purpose,
+    });
     if (!resolved.ephemeralCredential) {
       throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
     }
@@ -799,7 +819,12 @@ async function sftpOperation(req, res, hostId, operation) {
     });
 
     const result = await runSftpOperation({
-      host: resolved.host,
+      host: {
+        id: authorization.host.id,
+        host: authorization.host.host,
+        port: authorization.host.port,
+        username: authorization.host.username,
+      },
       credential: resolved.ephemeralCredential,
       sessionMeta: {
         sessionId: resolved.ephemeralCredential.sessionId,
@@ -814,12 +839,12 @@ async function sftpOperation(req, res, hostId, operation) {
   } catch (error) {
     logIdentityEvent('credentialUsedForPurpose', {
       userId: user.id,
-      hostId: resolved.host?.id || hostId,
-      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || null,
-      sessionId: resolved.ephemeralCredential?.sessionId || `sftp-${hostId}`,
-      runtime: resolved.runtime,
-      purpose: resolved.purpose,
-      authType: resolved.authType,
+      hostId: resolved?.host?.id || authorization?.host?.id || hostId,
+      credentialId: resolved?.credential?.id || resolved?.ephemeralCredential?.id || null,
+      sessionId: resolved?.ephemeralCredential?.sessionId || `sftp-${hostId}`,
+      runtime: resolved?.runtime || authorization?.runtime || 'browser',
+      purpose: resolved?.purpose || authorization?.purpose || 'sftp',
+      authType: resolved?.authType || authorization?.authType || null,
       result: 'error',
       timestamp: new Date().toISOString(),
     });
@@ -833,11 +858,11 @@ async function sftpOperation(req, res, hostId, operation) {
     }
     throw error;
   } finally {
-    if (resolved.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
+    if (resolved?.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
       const cleared = resolved.ephemeralCredential.clear();
       logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
         userId: user.id,
-        hostId: resolved.host?.id || hostId,
+        hostId: resolved.host?.id || authorization?.host?.id || hostId,
         credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
         sessionId: resolved.ephemeralCredential.sessionId,
         runtime: resolved.runtime,
@@ -866,6 +891,7 @@ async function route(req, res) {
     const user = await getSessionUser(req);
     if (user) {
       cleanupSessionsByUser(user.id, 'logout');
+      invalidateConnectAuthorizationsByUser(user.id, 'logout');
     }
     await destroySession(req);
     return json(res, 200, { ok: true }, { 'Set-Cookie': expiredSessionCookieHeader(req) });
@@ -884,7 +910,25 @@ async function route(req, res) {
   if (req.method === 'GET' && url.pathname === '/api/security/session-metrics') {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
-    return json(res, 200, { ok: true, metrics: getSessionMetrics() });
+    const sessionMetrics = getSessionMetrics();
+    return json(res, 200, { ok: true, metrics: { ...sessionMetrics, access: getSecurityMetrics(sessionMetrics) } });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/security/access-metrics') {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    const sessionMetrics = getSessionMetrics();
+    return json(res, 200, { ok: true, metrics: getSecurityMetrics(sessionMetrics) });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/security/connect-token') {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const token = await issueConnectAuthorization(user.id, await readJson(req));
+    return json(res, 201, token);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/security/connect-token/consume') {
+    const body = await readJson(req);
+    const authorization = await authorizeConnectRequest(body.userId || null, body);
+    return json(res, 200, { ok: true, ...authorization });
   }
 
   const hostId = url.pathname.match(/^\/api\/hosts\/([^/]+)$/);

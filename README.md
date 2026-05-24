@@ -6,7 +6,7 @@
 [![Stack](https://img.shields.io/badge/stack-React%20%2B%20Electron%20%2B%20Node-blue)](#)
 [![License](https://img.shields.io/badge/license-TBD-lightgrey)](#license)
 
-Ant Tech Async SSH Client is an experimental open source SSH/SFTP/FTP client for self-hosted infrastructure management. It combines a modern web dashboard, an Electron desktop runtime, a multi-session terminal manager, and a Node.js backend for authenticated browser preview.
+Ant Tech Async SSH Client is an experimental open source SSH/SFTP/FTP client for self-hosted infrastructure management and research-guided secure remote operations. It combines a modern web dashboard, an Electron desktop runtime, a multi-session terminal manager, and a Node.js backend for authenticated browser preview.
 
 The project is inspired by the operational workflows of tools such as Termius, MobaXterm, Tabby, and VSCode Remote, while remaining an original implementation focused on self-hosted control, modular architecture, and research-friendly extensibility.
 
@@ -239,6 +239,22 @@ This project is still experimental and requires additional security audit before
   - Practical Privacy-Preserving Authentication for SSH
   - Enabling Secure Shell Access with OpenID Connect
   - Towards SSH3: how HTTP/3 improves secure shells
+
+### Zero-Trust Access Layer
+
+- Short-lived connect authorization before SSH or SFTP runtime access.
+- One-time connect tokens scoped to user, host, runtime, purpose, and optional authType or identity.
+- Browser relay authorization boundary that validates token scope before identity resolution.
+- Electron runtime authorization that still validates session context and consumes a fresh token before connect.
+- Token invalidation on logout, host deletion, identity deletion, reconnect failure, and validation failure.
+- Metadata-only logging and metrics for token issuance, validation, rejection, expiration, reuse, and runtime-policy denial.
+- Research references by title only:
+  - Brute-force attack mitigation on remote access services via software-defined perimeter
+  - Enabling Secure Shell Access with OpenID Connect
+  - Practical Privacy-Preserving Authentication for SSH
+  - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
+  - Towards SSH3: how HTTP/3 improves secure shells
+  - Emerging research areas in SIP-based converged services for extended Web clients
 
 ### Research References
 

@@ -95,10 +95,17 @@ export function SftpFileManager({
   }, []);
 
   const runSftp = async <T,>(operation: string, payload: Record<string, any>): Promise<T> => {
+    const runtime = window.ipcRenderer ? 'electron' : 'browser';
+    const { token } = await api.requestConnectToken({
+      hostId,
+      runtime,
+      purpose: 'sftp',
+    });
+    const requestPayload = { ...payload, connectToken: token };
     if (window.ipcRenderer) {
-      return window.ipcRenderer.invoke<T>('sftp-operation', { sessionId, operation, payload });
+      return window.ipcRenderer.invoke<T>('sftp-operation', { sessionId, operation, payload: requestPayload });
     }
-    return api.sftpOperation<T>(hostId, operation, payload);
+    return api.sftpOperation<T>(hostId, operation, requestPayload);
   };
 
   const refresh = async (path = currentPath) => {

@@ -571,3 +571,81 @@ Research basis by title:
 - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
 - Emerging research areas in SIP-based converged services for extended Web clients
 - Towards SSH3: how HTTP/3 improves secure shells
+
+## Phase 1.5 — Lightweight Zero-Trust Access Layer
+
+What was built:
+
+- A lightweight zero-trust access layer for SSH and SFTP runtime connects.
+- Short-lived connect authorization with one-time tokens scoped to user, host, runtime, purpose, and optional authType/identity.
+- Browser relay authorization that validates token scope before identity resolution.
+- Electron runtime authorization that validates session/user context and consumes a short-lived connect token before connect.
+- Metadata-only security logging and metrics for token issuance, validation, rejection, expiration, reuse, and runtime-policy denial.
+- Lightweight rate limits for token issuance and connect attempts per user and host.
+
+Relationship with prior phases:
+
+- Smart Identity Engine still performs scoped identity selection.
+- Secure Vault still owns encrypted secret storage and metadata-only identity APIs.
+- Key Isolation still limits secret exposure to ephemeral runtime windows.
+- Session Cleanup still handles deterministic teardown after connect.
+- Phase 1.5 adds the access governance boundary that decides whether a connect request should be authorized at all.
+
+Connect authorization flow:
+
+auth session
+→ request connect token
+→ access policy validation
+→ token issued
+→ SSH/SFTP connect
+→ token validation
+→ identity resolve
+→ ephemeral credential
+→ session lifecycle
+→ cleanup
+→ token invalidated
+
+Token lifecycle:
+
+- Issued only after authenticated access-policy checks.
+- Scoped to userId, hostId, runtime, purpose, and optional authType/identity.
+- Short-lived by default.
+- Consumed once.
+- Invalidated on logout, host deletion, identity deletion, reconnect failure, and validation failure.
+
+Runtime policy model:
+
+- Browser:
+  - relay-only access
+  - no local agent
+  - no local filesystem identity capability
+  - metadata-only authorization surface
+- Electron:
+  - higher-trust local runtime
+  - local IPC capability
+  - still scoped per user/session/host
+  - connect token consumption required before local SSH/SFTP connect
+
+Limitations:
+
+- This is not a full SDP or ZTNA platform.
+- Policy remains lightweight and mostly metadata-driven.
+- Adaptive risk scoring and distributed policy orchestration are not implemented.
+- Live SSH/SFTP validation depends on configured targets outside this environment.
+
+Future work:
+
+- SDP gateway
+- federated identity
+- adaptive policy
+- eBPF observability
+- distributed access control
+
+Research basis by title:
+
+- Brute-force attack mitigation on remote access services via software-defined perimeter
+- Enabling Secure Shell Access with OpenID Connect
+- Practical Privacy-Preserving Authentication for SSH
+- ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
+- Towards SSH3: how HTTP/3 improves secure shells
+- Emerging research areas in SIP-based converged services for extended Web clients
