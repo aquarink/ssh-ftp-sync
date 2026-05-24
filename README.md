@@ -10,6 +10,10 @@ Ant Tech Async SSH Client is an experimental open source SSH/SFTP/FTP client for
 
 The project is inspired by the operational workflows of tools such as Termius, MobaXterm, Tabby, and VSCode Remote, while remaining an original implementation focused on self-hosted control, modular architecture, and research-friendly extensibility.
 
+## Name Note
+
+Ant Tech Async is a playful working name for async remote operations. It is not intended as a political statement or a reference to any foreign affiliation. The goal is a short, memorable name that still matches the project's focus on secure SSH, SFTP, identity isolation, and zero-trust access.
+
 ## Main Features
 
 - Multiple SSH tabs.

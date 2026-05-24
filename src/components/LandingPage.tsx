@@ -191,6 +191,17 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
                 execution so each layer can stay scoped and auditable.
               </p>
 
+              <div className="mt-6 max-w-2xl rounded-2xl border border-white/8 bg-white/[0.04] p-4 text-sm leading-7 text-slate-300">
+                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-cyan-200/80">
+                  <BadgeCheck size={14} />
+                  Name note
+                </div>
+                <p className="mt-2">
+                  Ant Tech Async is a playful working name for async remote operations. It is not intended as a
+                  political statement or a reference to any foreign affiliation.
+                </p>
+              </div>
+
               <div className="mt-8 flex flex-wrap gap-3">
                 <button
                   type="button"
