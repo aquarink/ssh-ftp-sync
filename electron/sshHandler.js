@@ -6,6 +6,8 @@ const { TerminalSessionManager } = require('./terminalSessionManager');
 const { resolveIdentity } = require('./identityResolver');
 
 const terminalSessions = new TerminalSessionManager();
+let activeUserId = null;
+// TODO(security): prefer authenticated app/session context over renderer-supplied userId whenever the desktop shell can derive it directly.
 
 function testSshConnection(config) {
   return new Promise((resolve, reject) => {
@@ -42,6 +44,7 @@ ipcMain.on('ssh-connect', (event, payload) => {
   try {
     const resolved = resolveIdentity({
       userId,
+      authenticatedUserId: activeUserId,
       hostId,
       hostUserId,
       runtime: 'electron',
@@ -72,6 +75,20 @@ ipcMain.on('ssh-connect', (event, payload) => {
   }
 });
 
+ipcMain.handle('session-context-set', async (event, { userId }) => {
+  if (!userId) {
+    activeUserId = null;
+    return { ok: true };
+  }
+  activeUserId = userId;
+  return { ok: true };
+});
+
+ipcMain.handle('session-context-clear', async () => {
+  activeUserId = null;
+  return { ok: true };
+});
+
 ipcMain.handle('credential-save-secret', async (event, { userId, id, secret }) => {
   if (!userId) throw new Error('User context is required to store a credential secret');
   saveCredentialSecret(userId, id, secret);
@@ -99,6 +116,7 @@ ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
 ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, credentialId, authType, host, port, username }) => {
   const resolved = resolveIdentity({
     userId,
+    authenticatedUserId: activeUserId,
     hostId,
     hostUserId,
     runtime: 'electron',

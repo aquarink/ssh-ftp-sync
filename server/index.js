@@ -423,7 +423,7 @@ function identityPayload(body) {
     secretProvided = true;
   }
   if (type === 'one_time') {
-    secret = { type, oneTime: true };
+    throw Object.assign(new Error('Authentication method is not supported yet'), { status: 400 });
   }
 
   return { type, label, username, notes, secret, fingerprint, publicKeyFingerprint, certificateFingerprint, runtime, secretProvided };

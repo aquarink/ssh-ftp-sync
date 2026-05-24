@@ -11,3 +11,21 @@
 - Known limitation: one-time and transient identity flows are not fully implemented yet, and password-only host persistence remains a legacy compatibility path rather than the preferred model.
 - Future recommendation: continue with Secure Vault, Key Isolation, and transient identity flows before expanding certificate/OIDC-style identity federation.
 - Acceptance test result: build/typecheck passed in this environment; end-to-end verification against a live SSH target was not available here, so live connection verification remains pending.
+
+## Verification Checklist - Pending
+
+- [ ] Create a real private key identity and verify metadata-only listing.
+- [ ] Assign the identity to a host and confirm only that identity is offered.
+- [ ] Connect in browser mode and confirm local agent access is blocked.
+- [ ] Connect in Electron mode and confirm the scoped identity resolves correctly.
+- [ ] Attempt cross-user `credentialId` and `hostId` access and confirm rejection.
+- [ ] Verify no secret material appears in console output, API responses, localStorage, or plaintext DB fields.
+- [ ] Verify legacy password-host records migrate to scoped identities where still required.
+
+## Security TODO
+
+- Electron renderer `userId` must remain advisory only. Prefer authenticated/session-derived context in the main process whenever available, and reject mismatches instead of trusting renderer payloads.
+
+## Legacy Password Migration Note
+
+- Existing host password rows are migration-only compatibility data. The long-term direction is to backfill them into scoped identities or transient connection credentials, then retire the legacy host password path.

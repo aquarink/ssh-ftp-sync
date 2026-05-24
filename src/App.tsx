@@ -358,6 +358,19 @@ function App() {
 
   useEffect(() => {
     if (!window.ipcRenderer) return;
+    if (session?.user.id) {
+      window.ipcRenderer.invoke('session-context-set', { userId: session.user.id }).catch((err) => {
+        console.error('Failed to sync Electron session context:', err.message);
+      });
+      return;
+    }
+    window.ipcRenderer.invoke('session-context-clear', {}).catch((err) => {
+      console.error('Failed to clear Electron session context:', err.message);
+    });
+  }, [session?.user.id]);
+
+  useEffect(() => {
+    if (!window.ipcRenderer) return;
 
     const onConnected = (_: any, { id }: { id: string }) => {
       setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'connected', errorMsg: '' } : tab));
@@ -425,6 +438,7 @@ function App() {
   const handleLogout = async () => {
     if (window.ipcRenderer) {
       sshTabs.forEach(tab => window.ipcRenderer.send('ssh-disconnect', { id: tab.id }));
+      await window.ipcRenderer.invoke('session-context-clear', {});
     }
     await api.logout();
     setSession(null);
@@ -494,6 +508,9 @@ function App() {
 
     try {
       const hostName = fName || fHost;
+      if (fAuthType === 'one_time') {
+        throw new Error('One-time identity is disabled until the transient flow is implemented');
+      }
       if (fAuthType === 'identity' && !fCredentialId) {
         throw new Error('Select an identity for this host');
       }
@@ -1214,7 +1231,7 @@ function App() {
                 <select value={fAuthType} onChange={e => setFAuthType(e.target.value as any)} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
                   <option value="password">Password</option>
                   <option value="identity">Identity / Keychain</option>
-                  <option value="one_time">One-time key</option>
+                  <option value="one_time" disabled>One-time key (disabled)</option>
                 </select>
               </div>
               {fAuthType === 'identity' && (
@@ -1237,7 +1254,7 @@ function App() {
               )}
               {fAuthType === 'one_time' && (
                 <div className="p-3 bg-yellow-500/10 text-yellow-200 border border-yellow-500/20 rounded text-xs leading-5">
-                  One-time key is intentionally not saved with the host. Save the host first, then use a saved identity or connect with a transient identity flow.
+                  One-time key is experimental and disabled until the transient identity flow is fully implemented.
                 </div>
               )}
               {editingHost && (

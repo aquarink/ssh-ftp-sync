@@ -72,6 +72,7 @@ Limitation:
 - One-time identity flows are only partially modeled and still require a future transient-credential workflow.
 - Password-only host persistence remains a legacy compatibility path and is not the preferred secure flow.
 - Electron host ownership validation depends on user-scoped state passed from the renderer.
+- Legacy password host rows are still present in the schema as migration-only compatibility data and should be phased out through identity backfill.
 
 Next work:
 

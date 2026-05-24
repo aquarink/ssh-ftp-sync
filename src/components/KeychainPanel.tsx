@@ -231,7 +231,7 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
                 : 'Browser runtime cannot use local SSH agents. Select a server-encrypted or assigned identity instead.'}
             </div>
           )}
-          {type === 'one_time' && <div className="text-xs text-yellow-200 leading-5">One-time identities are intentionally not saved. Use this mode from a host connection form when needed.</div>}
+          {type === 'one_time' && <div className="text-xs text-yellow-200 leading-5">One-time identities are experimental and disabled until the transient credential flow is fully implemented.</div>}
           <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes, optional" className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none resize-none" />
           <button disabled={!isSaveable} className="w-full bg-primary text-background rounded-md py-2 text-sm font-semibold disabled:opacity-40">Save identity</button>
           <p className="text-xs text-textMuted leading-5">Only metadata is returned by the API. Secrets are resolved only during connection.</p>

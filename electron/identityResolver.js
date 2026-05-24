@@ -72,6 +72,7 @@ function resolveSecretMaterial(secret, runtime) {
 
 function resolveIdentity({
   userId,
+  authenticatedUserId = null,
   hostId = null,
   hostUserId = null,
   runtime = 'electron',
@@ -82,18 +83,25 @@ function resolveIdentity({
   const normalizedRuntime = normalizeRuntime(runtime);
   const normalizedAuthType = normalizeAuthType(authType);
   if (normalizedRuntime === 'browser') browserUnsupported();
-  if (hostId && hostUserId && hostUserId !== userId) {
+  const effectiveUserId = authenticatedUserId || userId;
+  if (!effectiveUserId) {
+    throw new Error('Authenticated user context is unavailable');
+  }
+  if (authenticatedUserId && userId && authenticatedUserId !== userId) {
+    throw new Error('Renderer user context does not match authenticated session context');
+  }
+  if (hostId && hostUserId && hostUserId !== effectiveUserId) {
     throw new Error('Host does not belong to user');
   }
   if (!credentialId) {
     if (normalizedAuthType === 'password') credentialUnavailable();
     throw new Error('Identity is not assigned to this host');
   }
-  if (hostUserId && hostUserId !== userId) {
+  if (hostUserId && hostUserId !== effectiveUserId) {
     throw new Error('Host not found');
   }
 
-  const secret = readCredentialSecret(userId, credentialId);
+  const secret = readCredentialSecret(effectiveUserId, credentialId);
   const connection = resolveSecretMaterial(secret, normalizedRuntime);
 
   return {
@@ -102,6 +110,7 @@ function resolveIdentity({
     runtime: normalizedRuntime,
     purpose,
     connection,
+    userId: effectiveUserId,
   };
 }
 
