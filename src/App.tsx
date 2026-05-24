@@ -458,7 +458,7 @@ function App() {
     setFPort(String(host.port || 22));
     setFUser(host.username || 'root');
     setFPass('');
-    setFAuthType(host.credentialId ? 'identity' : 'password');
+    setFAuthType(host.authType === 'one_time' ? 'one_time' : (host.credentialId ? 'identity' : 'password'));
     setFCredentialId(host.credentialId || '');
     setFStartupDirectory(host.startupDirectory || '');
     setFNotes(host.notes || '');
@@ -474,7 +474,7 @@ function App() {
     setFPort(String(host.port || 22));
     setFUser(host.username || 'root');
     setFPass('');
-    setFAuthType(host.credentialId ? 'identity' : 'password');
+    setFAuthType(host.authType === 'one_time' ? 'one_time' : (host.credentialId ? 'identity' : 'password'));
     setFCredentialId(host.credentialId || '');
     setFStartupDirectory(host.startupDirectory || '');
     setFNotes(host.notes || '');
@@ -493,25 +493,9 @@ function App() {
     if (!session) return;
 
     try {
-      let authType = fAuthType;
-      let credentialId = fAuthType === 'identity' ? fCredentialId : '';
       const hostName = fName || fHost;
-
-      if (fAuthType === 'password' && fPass) {
-        const { identity } = await api.createIdentity({
-          type: 'password',
-          label: `${hostName} password`,
-          username: fUser,
-          password: fPass,
-        });
-        credentialId = identity.id;
-        authType = 'identity';
-        if (window.ipcRenderer) {
-          await window.ipcRenderer.invoke('identity-save-secret', {
-            id: identity.id,
-            secret: { type: 'password', password: fPass },
-          });
-        }
+      if (fAuthType === 'identity' && !fCredentialId) {
+        throw new Error('Select an identity for this host');
       }
 
       const newHostData: Omit<Host, 'id'> & { removeCredential?: boolean } = {
@@ -519,13 +503,12 @@ function App() {
         host: fHost,
         port: parseInt(fPort) || 22,
         username: fUser,
-        authType,
-        credentialId: credentialId || null,
+        authType: fAuthType,
+        credentialId: fAuthType === 'identity' ? fCredentialId : null,
         startupDirectory: fStartupDirectory || null,
         notes: fNotes || null,
         tags: fTags || null,
       };
-      if (fAuthType === 'password' && fPass) newHostData.password = fPass;
       if (removeSavedCredential) newHostData.removeCredential = true;
       const { host } = editingHost
         ? await api.updateHost(editingHost.id, newHostData)
@@ -1017,7 +1000,10 @@ function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col bg-background relative h-full min-w-0">
         {route === '/app/keychain' ? (
-          <KeychainPanel onHostUpdated={(host) => setHosts(current => current.map(item => item.id === host.id ? host : item))} />
+          <KeychainPanel
+            userId={session?.user.id}
+            onHostUpdated={(host) => setHosts(current => current.map(item => item.id === host.id ? host : item))}
+          />
         ) : activeTab ? (
           <>
             <div className="h-12 border-b border-border flex items-center bg-surface/50 overflow-x-auto shrink-0">
@@ -1237,9 +1223,16 @@ function App() {
                   <select value={fCredentialId} onChange={e => setFCredentialId(e.target.value)} required className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
                     <option value="">Select identity</option>
                     {credentials.map(credential => (
-                      <option key={credential.id} value={credential.id}>{credential.label}</option>
+                      <option key={credential.id} value={credential.id}>
+                        {credential.label}{credential.assignedHostCount ? ` (${credential.assignedHostCount})` : ''}
+                      </option>
                     ))}
                   </select>
+                  <div className="mt-2 text-xs text-textMuted leading-5">
+                    Only the selected identity will be offered to this host.
+                    <br />
+                    Secrets are resolved only during connection.
+                  </div>
                 </div>
               )}
               {fAuthType === 'one_time' && (
@@ -1256,7 +1249,10 @@ function App() {
               )}
               <div>
                 <label className="block text-xs text-textMuted mb-1">{editingHost ? 'New password' : 'Password'}</label>
-                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder={editingHost ? 'Leave empty to keep saved credential' : 'Leave empty if using identity'} />
+                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Not stored in host record" />
+                <div className="mt-2 text-xs text-textMuted leading-5">
+                  Password auth is not auto-promoted to all identities. Use a saved identity if you need persistence.
+                </div>
               </div>
               {editingHost?.credentialId && (
                 <label className="flex items-center gap-2 text-xs text-textMuted">

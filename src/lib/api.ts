@@ -12,12 +12,13 @@ export interface Session {
 
 export interface Host {
   id: string;
+  userId?: string;
   name: string;
   host: string;
   port: number;
   username: string;
   password?: string;
-  authType?: 'password' | 'private_key' | 'credential' | 'identity' | 'agent' | 'manual' | 'one_time';
+  authType?: 'password' | 'private_key' | 'private_key_passphrase' | 'key_with_certificate' | 'certificate' | 'credential' | 'identity' | 'agent' | 'manual' | 'one_time';
   credentialId?: string | null;
   startupDirectory?: string | null;
   notes?: string | null;
@@ -45,13 +46,14 @@ export interface SftpEntry {
 
 export interface SshCredential {
   id: string;
-  type: 'password' | 'private_key' | 'key_pair' | 'certificate' | 'key_with_certificate' | 'agent' | 'one_time';
+  type: 'password' | 'private_key' | 'private_key_passphrase' | 'key_pair' | 'certificate' | 'key_with_certificate' | 'agent' | 'one_time';
   label: string;
   username?: string | null;
   fingerprint?: string | null;
   publicKeyFingerprint?: string | null;
   certificateFingerprint?: string | null;
   notes?: string | null;
+  assignedHostCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,6 +70,7 @@ export interface SshIdentityPayload {
   certificate?: string;
   passphrase?: string;
   notes?: string;
+  runtime?: 'browser' | 'electron';
 }
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
@@ -167,7 +170,7 @@ export const api = {
     request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
-  testIdentity: (id: string, payload: { host: string; port: number; username: string }) =>
+  testIdentity: (id: string, payload: { host: string; port: number; username: string; runtime?: 'browser' | 'electron'; authType?: string }) =>
     request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}/test`, {
       method: 'POST',
       body: JSON.stringify(payload),

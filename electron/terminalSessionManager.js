@@ -57,7 +57,7 @@ class TerminalSessionManager {
       password: config.password || undefined,
       privateKey: config.privateKey || undefined,
       passphrase: config.passphrase || undefined,
-      cert: config.certificate || undefined,
+      cert: config.cert || config.certificate || undefined,
       agent: config.agent || undefined,
       readyTimeout: 15000,
       keepaliveInterval: 25000,

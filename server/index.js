@@ -15,8 +15,8 @@ const { verifySignupEmail } = require('./emailVerification');
 const { validateTurnstile } = require('./turnstile');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
+const { resolveIdentity } = require('./identityResolver');
 const {
-  readCredentialSecret,
   removeCredentialSecret,
   saveCredentialSecret,
   validateCertificate,
@@ -69,7 +69,9 @@ function hostPayload(body) {
   const name = String(body.name || host).trim();
   const port = Number.parseInt(body.port, 10) || 22;
   const password = typeof body.password === 'string' ? body.password : '';
-  const authType = ['password', 'private_key', 'credential', 'identity', 'agent', 'manual', 'one_time'].includes(body.authType) ? body.authType : 'password';
+  const authType = ['password', 'private_key', 'private_key_passphrase', 'key_with_certificate', 'certificate', 'agent', 'one_time', 'identity', 'credential'].includes(body.authType)
+    ? body.authType
+    : 'password';
   const credentialId = typeof body.credentialId === 'string' && body.credentialId ? body.credentialId : null;
   const startupDirectory = String(body.startupDirectory || '').trim() || null;
   const notes = String(body.notes || '').trim() || null;
@@ -80,6 +82,9 @@ function hostPayload(body) {
   }
   if (port < 1 || port > 65535) {
     throw Object.assign(new Error('Port must be between 1 and 65535'), { status: 400 });
+  }
+  if (authType !== 'password' && authType !== 'one_time' && !credentialId) {
+    throw Object.assign(new Error('Credential is required for the selected authentication method'), { status: 400 });
   }
 
   return { host, username, name, port, password, authType, credentialId, startupDirectory, notes, tags };
@@ -249,7 +254,7 @@ async function listHosts(req, res) {
   if (!user) return;
 
   const [hosts] = await pool.execute(
-    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
+    `SELECT id, user_id AS userId, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
             startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
        FROM hosts
       WHERE user_id = ?
@@ -260,23 +265,15 @@ async function listHosts(req, res) {
 }
 
 async function ensureUserCredential(userId, credentialId) {
-  if (!credentialId) return;
+  if (!credentialId) return null;
   const [rows] = await pool.execute(
-    'SELECT id FROM ssh_credentials WHERE id = ? AND user_id = ? LIMIT 1',
-    [credentialId, userId]
+    'SELECT id, user_id FROM ssh_credentials WHERE id = ? LIMIT 1',
+    [credentialId]
   );
-  if (!rows[0]) throw Object.assign(new Error('Selected identity was not found'), { status: 400 });
-}
-
-async function createPasswordIdentityForHost(user, host) {
-  const credentialId = randomUUID();
-  const storageRef = saveCredentialSecret(credentialId, { type: 'password', password: host.password });
-  await pool.execute(
-    `INSERT INTO ssh_credentials (id, user_id, type, label, username, storage_ref)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [credentialId, user.id, 'password', `${host.name} password`, host.username, storageRef]
-  );
-  return credentialId;
+  const row = rows[0];
+  if (!row) throw Object.assign(new Error('Identity not found'), { status: 404 });
+  if (row.user_id !== userId) throw Object.assign(new Error('Identity does not belong to user'), { status: 403 });
+  return row;
 }
 
 async function createHost(req, res) {
@@ -284,13 +281,9 @@ async function createHost(req, res) {
   if (!user) return;
 
   const host = { id: randomUUID(), ...hostPayload(await readJson(req)) };
-  if (host.authType === 'password' && host.password) {
-    const credentialId = await createPasswordIdentityForHost(user, host);
-    host.authType = 'credential';
-    host.credentialId = credentialId;
-    host.password = '';
-  }
   await ensureUserCredential(user.id, host.credentialId);
+  host.userId = user.id;
+  host.password = '';
 
   await pool.execute(
     `INSERT INTO hosts
@@ -316,15 +309,9 @@ async function updateHost(req, res, id) {
 
   const body = await readJson(req);
   const host = hostPayload(body);
-  if (host.authType === 'password' && host.password) {
-    host.credentialId = await createPasswordIdentityForHost(user, host);
-    host.authType = 'credential';
-    host.password = '';
-  } else if (host.authType === 'password' && !body.removeCredential) {
-    host.credentialId = existingRows[0].credential_id || null;
-    host.authType = host.credentialId ? 'credential' : 'password';
-  } else if (body.removeCredential) {
+  if (body.removeCredential) {
     host.credentialId = null;
+    host.authType = 'password';
   }
 
   await ensureUserCredential(user.id, host.credentialId);
@@ -345,7 +332,7 @@ async function updateHost(req, res, id) {
   );
 
   const [rows] = await pool.execute(
-    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
+    `SELECT id, user_id AS userId, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
             startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
        FROM hosts
       WHERE id = ? AND user_id = ?
@@ -365,6 +352,7 @@ function publicCredential(row) {
     publicKeyFingerprint: row.public_key_fingerprint,
     certificateFingerprint: row.certificate_fingerprint,
     notes: row.notes,
+    assignedHostCount: Number(row.assigned_host_count || 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -374,10 +362,16 @@ async function listIdentities(req, res) {
   const user = await requireUser(req, res);
   if (!user) return;
   const [rows] = await pool.execute(
-    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at
-       FROM ssh_credentials
-      WHERE user_id = ?
-      ORDER BY created_at DESC`,
+    `SELECT c.id, c.type, c.label, c.username, c.fingerprint, c.public_key_fingerprint, c.certificate_fingerprint, c.notes, c.created_at, c.updated_at,
+            (
+              SELECT COUNT(*)
+                FROM hosts h
+               WHERE h.credential_id = c.id
+                 AND h.user_id = c.user_id
+            ) AS assigned_host_count
+       FROM ssh_credentials c
+      WHERE c.user_id = ?
+      ORDER BY c.created_at DESC`,
     [user.id]
   );
   const identities = rows.map(publicCredential);
@@ -385,45 +379,54 @@ async function listIdentities(req, res) {
 }
 
 function identityPayload(body) {
-  const type = ['password', 'private_key', 'key_pair', 'certificate', 'key_with_certificate', 'agent', 'one_time'].includes(body.type) ? body.type : 'private_key';
+  const type = ['password', 'private_key', 'private_key_passphrase', 'key_pair', 'certificate', 'key_with_certificate', 'agent', 'one_time'].includes(body.type) ? body.type : 'private_key';
   const label = String(body.label || '').trim();
   const username = String(body.username || '').trim() || null;
   const notes = String(body.notes || '').trim() || null;
+  const runtime = String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser';
   if (!label) throw Object.assign(new Error('Identity label is required'), { status: 400 });
 
   let secret = { type };
   let fingerprint = null;
   let publicKeyFingerprint = null;
   let certificateFingerprint = null;
+  let secretProvided = false;
 
   if (type === 'password') {
     if (typeof body.password !== 'string' || !body.password) {
       throw Object.assign(new Error('Password is required'), { status: 400 });
     }
     secret = { type, password: body.password };
+    secretProvided = true;
   }
-  if (['private_key', 'key_pair', 'key_with_certificate'].includes(type)) {
+  if (['private_key', 'private_key_passphrase', 'key_pair', 'key_with_certificate'].includes(type)) {
     fingerprint = validatePrivateKey(body.privateKey, body.passphrase);
     publicKeyFingerprint = validatePublicKey(body.publicKey);
     secret = {
-      type,
+      type: type === 'key_pair' ? 'private_key' : type,
       privateKey: body.privateKey,
       publicKey: body.publicKey || '',
       passphrase: body.passphrase || '',
     };
+    secretProvided = true;
   }
   if (['certificate', 'key_with_certificate'].includes(type)) {
     certificateFingerprint = validateCertificate(body.certificate);
     secret = { ...secret, certificate: body.certificate || '' };
+    secretProvided = true;
   }
   if (type === 'agent') {
+    if (runtime === 'browser') {
+      throw Object.assign(new Error('Authentication method is not supported in browser runtime'), { status: 400 });
+    }
     secret = { type, agent: process.platform === 'win32' ? 'pageant' : (process.env.SSH_AUTH_SOCK || '') };
+    secretProvided = true;
   }
   if (type === 'one_time') {
-    throw Object.assign(new Error('One-time identities are not saved. Select one-time key from the host connection form.'), { status: 400 });
+    secret = { type, oneTime: true };
   }
 
-  return { type, label, username, notes, secret, fingerprint, publicKeyFingerprint, certificateFingerprint };
+  return { type, label, username, notes, secret, fingerprint, publicKeyFingerprint, certificateFingerprint, runtime, secretProvided };
 }
 
 async function createIdentity(req, res) {
@@ -431,8 +434,10 @@ async function createIdentity(req, res) {
   if (!user) return;
   const id = randomUUID();
   const identity = identityPayload(await readJson(req));
-
-  const storageRef = saveCredentialSecret(id, identity.secret);
+  const storageRef = `${id}.json`;
+  if (identity.secretProvided && identity.runtime === 'browser') {
+    saveCredentialSecret(id, identity.secret);
+  }
   await pool.execute(
     `INSERT INTO ssh_credentials
       (id, user_id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, storage_ref)
@@ -440,7 +445,8 @@ async function createIdentity(req, res) {
     [id, user.id, identity.type, identity.label, identity.username, identity.fingerprint, identity.publicKeyFingerprint, identity.certificateFingerprint, identity.notes, storageRef]
   );
   const [rows] = await pool.execute(
-    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at
+    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at,
+            0 AS assigned_host_count
        FROM ssh_credentials
       WHERE id = ? AND user_id = ?
       LIMIT 1`,
@@ -454,9 +460,15 @@ async function getIdentity(req, res, id) {
   const user = await requireUser(req, res);
   if (!user) return;
   const [rows] = await pool.execute(
-    `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at
-       FROM ssh_credentials
-      WHERE id = ? AND user_id = ?
+    `SELECT c.id, c.type, c.label, c.username, c.fingerprint, c.public_key_fingerprint, c.certificate_fingerprint, c.notes, c.created_at, c.updated_at,
+            (
+              SELECT COUNT(*)
+                FROM hosts h
+               WHERE h.credential_id = c.id
+                 AND h.user_id = c.user_id
+            ) AS assigned_host_count
+       FROM ssh_credentials c
+      WHERE c.id = ? AND c.user_id = ?
       LIMIT 1`,
     [id, user.id]
   );
@@ -499,21 +511,21 @@ async function assignIdentityToHost(req, res, hostId) {
   if (!user) return;
   const body = await readJson(req);
   const identityId = typeof body.identityId === 'string' && body.identityId ? body.identityId : null;
+  const authType = identityId ? 'identity' : 'password';
   const [hosts] = await pool.execute(
     'SELECT id FROM hosts WHERE id = ? AND user_id = ? LIMIT 1',
     [hostId, user.id]
   );
   if (!hosts[0]) throw Object.assign(new Error('Host not found'), { status: 404 });
   if (identityId) {
-    const [identities] = await pool.execute('SELECT id FROM ssh_credentials WHERE id = ? AND user_id = ? LIMIT 1', [identityId, user.id]);
-    if (!identities[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
+    await ensureUserCredential(user.id, identityId);
   }
   await pool.execute(
     'UPDATE hosts SET auth_type = ?, credential_id = ?, password = \'\' WHERE id = ? AND user_id = ?',
-    [identityId ? 'identity' : 'password', identityId, hostId, user.id]
+    [authType, identityId, hostId, user.id]
   );
   const [updated] = await pool.execute(
-    `SELECT id, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
+    `SELECT id, user_id AS userId, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
             startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
        FROM hosts
       WHERE id = ? AND user_id = ?
@@ -561,37 +573,16 @@ async function testIdentity(req, res, id) {
   const username = String(body.username || '').trim();
   const port = Number.parseInt(body.port, 10) || 22;
   if (!host || !username) throw Object.assign(new Error('Host and username are required'), { status: 400 });
-  const [rows] = await pool.execute(
-    `SELECT storage_ref
-       FROM ssh_credentials
-      WHERE id = ? AND user_id = ?
-      LIMIT 1`,
-    [id, user.id]
-  );
-  if (!rows[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
-  const secret = readCredentialSecret(rows[0].storage_ref);
-  if (secret.type === 'agent' && !secret.agent) {
-    throw Object.assign(new Error('SSH agent is not available. SSH_AUTH_SOCK is empty on this server.'), { status: 400 });
-  }
-  await testSshConnection({ host, username, port, ...secret });
+  const resolved = await resolveIdentity({
+    userId: user.id,
+    hostId: null,
+    runtime: String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser',
+    authType: body.authType || null,
+    credentialId: id,
+    purpose: 'test_connection',
+  });
+  await testSshConnection({ host, username, port, ...resolved.connection });
   json(res, 200, { ok: true });
-}
-
-async function resolveHostCredential(userId, host) {
-  if (!host.credential_id) return host;
-  const [rows] = await pool.execute(
-    `SELECT storage_ref
-       FROM ssh_credentials
-      WHERE id = ? AND user_id = ?
-      LIMIT 1`,
-    [host.credential_id, userId]
-  );
-  if (!rows[0]) throw Object.assign(new Error('Assigned SSH identity was not found'), { status: 400 });
-  const secret = readCredentialSecret(rows[0].storage_ref);
-  if (secret.type === 'agent' && !secret.agent) {
-    throw Object.assign(new Error('SSH agent identity is not available on this server'), { status: 400 });
-  }
-  return { ...host, ...secret };
 }
 
 async function deleteHost(req, res, id) {
@@ -603,15 +594,22 @@ async function deleteHost(req, res, id) {
 }
 
 async function getUserHost(userId, hostId) {
-  const [rows] = await pool.execute(
-    `SELECT id, host, port, username, password, auth_type, credential_id
-       FROM hosts
-      WHERE id = ? AND user_id = ?
-      LIMIT 1`,
-    [hostId, userId]
-  );
-  if (!rows[0]) throw Object.assign(new Error('Host not found'), { status: 404 });
-  return resolveHostCredential(userId, rows[0]);
+  const resolved = await resolveIdentity({
+    userId,
+    hostId,
+    runtime: 'browser',
+    purpose: 'sftp',
+  });
+  if (!resolved.host) throw Object.assign(new Error('Host not found'), { status: 404 });
+  return {
+    id: resolved.host.id,
+    host: resolved.host.host,
+    port: resolved.host.port,
+    username: resolved.host.username,
+    authType: resolved.host.auth_type,
+    credentialId: resolved.host.credential_id,
+    ...resolved.connection,
+  };
 }
 
 async function sftpOperation(req, res, hostId, operation) {
@@ -681,7 +679,13 @@ async function route(req, res) {
 
 const server = http.createServer((req, res) => {
   route(req, res).catch((error) => {
-    if (!error.status || error.status >= 500) console.error(error);
+    if (!error.status || error.status >= 500) {
+      console.error('api-error', {
+        status: error.status || 500,
+        message: error.message,
+        code: error.code || null,
+      });
+    }
     const payload = {
       error: error.status ? error.message : 'Internal server error',
     };

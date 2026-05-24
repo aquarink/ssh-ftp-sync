@@ -208,6 +208,34 @@ This project is still experimental and requires additional security audit before
 - Admin approval is required before normal users can sign in.
 - SSH certificate and agent support are active compatibility research areas.
 
+## Research-Guided Security Features
+
+- Smart Identity Engine for scoped credential resolution.
+- Scoped identity selection per host and session.
+- No auto-offer of all keys or identities.
+- Browser and Electron runtime-specific policy enforcement.
+- Secret resolution only during connection setup.
+
+### Research References
+
+- Practical Privacy-Preserving Authentication for SSH
+- On the Security of SSH Client Signatures
+- Enabling Secure Shell Access with OpenID Connect
+
+### Experimental Features
+
+- Browser SSH relay.
+- Electron SSH IPC sessions.
+- Scoped identity assignment and metadata-only identity listing.
+- Runtime-specific secure storage routing.
+
+### Security Architecture
+
+- Browser mode resolves secrets from the server-encrypted vault only.
+- Electron mode resolves secrets from local secure storage only.
+- Identity metadata is exposed separately from secret material.
+- Host-to-credential assignment is enforced before connection setup.
+
 ## Open Source & Contribution
 
 This repository is being prepared as an open source research project.

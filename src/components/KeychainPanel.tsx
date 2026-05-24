@@ -5,6 +5,7 @@ import { api, Host, SshIdentity } from '../lib/api';
 const identityTypes: Array<{ value: SshIdentity['type']; label: string }> = [
   { value: 'password', label: 'Password' },
   { value: 'private_key', label: 'Private key' },
+  { value: 'private_key_passphrase', label: 'Private key with passphrase' },
   { value: 'key_pair', label: 'Public + private key pair' },
   { value: 'certificate', label: 'SSH certificate' },
   { value: 'key_with_certificate', label: 'Private key + SSH certificate' },
@@ -27,10 +28,11 @@ function sshBlobFingerprint(value: string): Promise<string> {
 }
 
 interface KeychainPanelProps {
+  userId?: string;
   onHostUpdated?: (host: Host) => void;
 }
 
-export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
+export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
   const [identities, setIdentities] = useState<SshIdentity[]>([]);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [hostAssignments, setHostAssignments] = useState<Record<string, string>>({});
@@ -47,12 +49,15 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
   const [notes, setNotes] = useState('');
   const [publicKeyFingerprint, setPublicKeyFingerprint] = useState('');
   const [certificateFingerprint, setCertificateFingerprint] = useState('');
+  const isElectronRuntime = Boolean(window.ipcRenderer);
+  const runtime: 'browser' | 'electron' = isElectronRuntime ? 'electron' : 'browser';
 
   const needsPassword = type === 'password';
-  const needsPrivateKey = ['private_key', 'key_pair', 'key_with_certificate'].includes(type);
+  const needsPrivateKey = ['private_key', 'private_key_passphrase', 'key_pair', 'key_with_certificate'].includes(type);
   const needsPublicKey = type === 'key_pair';
   const needsCertificate = ['certificate', 'key_with_certificate'].includes(type);
-  const isSaveable = type !== 'one_time';
+  const canUseAgent = runtime === 'electron';
+  const isSaveable = type !== 'one_time' && (type !== 'agent' || canUseAgent);
 
   const privateKeyFormat = useMemo(() => {
     if (!privateKey) return '';
@@ -130,9 +135,9 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
     }
     try {
       const secret = { type, password, privateKey, publicKey, certificate, passphrase };
-      const { identity } = await api.createIdentity({ type, label, username, password, privateKey, publicKey, certificate, passphrase, notes });
+      const { identity } = await api.createIdentity({ type, label, username, password, privateKey, publicKey, certificate, passphrase, notes, runtime });
       if (window.ipcRenderer) {
-        await window.ipcRenderer.invoke('identity-save-secret', { id: identity.id, secret });
+        await window.ipcRenderer.invoke('identity-save-secret', { userId, id: identity.id, secret });
       }
       resetForm();
       await loadIdentities();
@@ -144,11 +149,13 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
   const removeIdentity = async (id: string) => {
     if (!confirm('Remove this SSH identity? Hosts assigned to it will no longer connect.')) return;
     await api.deleteIdentity(id);
-    if (window.ipcRenderer) await window.ipcRenderer.invoke('identity-remove-secret', { id });
+    if (window.ipcRenderer) await window.ipcRenderer.invoke('identity-remove-secret', { userId, id });
     await loadIdentities();
   };
 
   const testIdentity = async (id: string) => {
+    const identity = identities.find(item => item.id === id);
+    if (!identity) return;
     const host = prompt('SSH host or IP');
     if (!host) return;
     const username = prompt('Username', 'root');
@@ -156,7 +163,11 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
     const port = Number.parseInt(prompt('Port', '22') || '22', 10) || 22;
     setError('');
     try {
-      await api.testIdentity(id, { host, username, port });
+      if (window.ipcRenderer) {
+        await window.ipcRenderer.invoke('identity-test', { userId, credentialId: id, host, username, port, authType: identity.type });
+      } else {
+        await api.testIdentity(id, { host, username, port, runtime, authType: identity.type });
+      }
       alert('Identity test succeeded.');
     } catch (err: any) {
       setError(err.message || 'Identity test failed');
@@ -190,7 +201,7 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
           <input value={label} onChange={e => setLabel(e.target.value)} required placeholder="Identity label" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none" />
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Default username, optional" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none" />
           <select value={type} onChange={e => setType(e.target.value as SshIdentity['type'])} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none">
-            {identityTypes.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+            {identityTypes.filter(item => canUseAgent || item.value !== 'agent').map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
 
           {needsPassword && <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="Password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none" />}
@@ -213,11 +224,17 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
               {certificateFingerprint && <div className="text-xs text-textMuted">Certificate {certificateFingerprint}</div>}
             </>
           )}
-          {type === 'agent' && <div className="text-xs text-textMuted leading-5">Uses SSH_AUTH_SOCK on Linux/macOS or Pageant/OpenSSH-compatible agent on Windows. No private key is stored.</div>}
+          {type === 'agent' && (
+            <div className="text-xs text-textMuted leading-5">
+              {canUseAgent
+                ? 'Electron runtime may use a local SSH agent or OS-backed secure storage. Browser runtime cannot use local agents.'
+                : 'Browser runtime cannot use local SSH agents. Select a server-encrypted or assigned identity instead.'}
+            </div>
+          )}
           {type === 'one_time' && <div className="text-xs text-yellow-200 leading-5">One-time identities are intentionally not saved. Use this mode from a host connection form when needed.</div>}
           <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes, optional" className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none resize-none" />
           <button disabled={!isSaveable} className="w-full bg-primary text-background rounded-md py-2 text-sm font-semibold disabled:opacity-40">Save identity</button>
-          <p className="text-xs text-textMuted leading-5">Secrets are not returned by the API after save. Database rows contain metadata and fingerprints only.</p>
+          <p className="text-xs text-textMuted leading-5">Only metadata is returned by the API. Secrets are resolved only during connection.</p>
         </form>
 
         <div className="border border-border bg-surface rounded-lg overflow-hidden">
@@ -235,6 +252,7 @@ export function KeychainPanel({ onHostUpdated }: KeychainPanelProps) {
                   <div className="min-w-0 flex-1">
                     <div className="text-sm text-white truncate">{identity.label}</div>
                     <div className="text-xs text-textMuted truncate">{identity.type} {identity.fingerprint || identity.certificateFingerprint || ''}</div>
+                    <div className="text-[11px] text-textMuted mt-1">Assigned to {identity.assignedHostCount || 0} host{(identity.assignedHostCount || 0) === 1 ? '' : 's'}</div>
                   </div>
                   <button onClick={() => testIdentity(identity.id)} className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-textMuted hover:text-white">Test</button>
                   <button onClick={() => removeIdentity(identity.id)} className="p-2 rounded hover:bg-red-500/20 text-textMuted hover:text-red-300"><Trash2 size={15} /></button>

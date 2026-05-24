@@ -1,8 +1,7 @@
 const { Client } = require('ssh2');
 const { WebSocket, WebSocketServer } = require('ws');
 const { getSessionUser } = require('./auth');
-const { pool } = require('./db');
-const { readCredentialSecret } = require('./credentialStore');
+const { resolveIdentity } = require('./identityResolver');
 
 const maxTerminalMessageBytes = 64 * 1024;
 const webSocketKeepaliveMs = 25000;
@@ -30,31 +29,21 @@ async function getUserHost(req, url) {
 
   const hostId = url.searchParams.get('hostId');
   if (!hostId) throw Object.assign(new Error('Host is required'), { status: 400 });
-
-  const [rows] = await pool.execute(
-    `SELECT id, host, port, username, password, auth_type, credential_id
-       FROM hosts
-      WHERE id = ? AND user_id = ?
-      LIMIT 1`,
-    [hostId, user.id]
-  );
-  if (!rows[0]) throw Object.assign(new Error('Host not found'), { status: 404 });
-  const host = rows[0];
-  if (!host.credential_id) return host;
-
-  const [credentials] = await pool.execute(
-    `SELECT storage_ref
-       FROM ssh_credentials
-      WHERE id = ? AND user_id = ?
-      LIMIT 1`,
-    [host.credential_id, user.id]
-  );
-  if (!credentials[0]) throw Object.assign(new Error('Assigned SSH identity was not found'), { status: 400 });
-  const secret = readCredentialSecret(credentials[0].storage_ref);
-  if (secret.type === 'agent' && !secret.agent) {
-    throw Object.assign(new Error('SSH agent identity is not available on this server'), { status: 400 });
-  }
-  return { ...host, ...secret };
+  const credentialId = url.searchParams.get('credentialId') || null;
+  const authType = url.searchParams.get('authType') || null;
+  const purpose = url.searchParams.get('purpose') || 'ssh';
+  const resolved = await resolveIdentity({
+    userId: user.id,
+    hostId,
+    runtime: 'browser',
+    authType,
+    credentialId,
+    purpose,
+  });
+  return {
+    ...resolved.host,
+    ...resolved.connection,
+  };
 }
 
 function readMessage(raw) {

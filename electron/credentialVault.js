@@ -18,24 +18,34 @@ function writeVault(vault) {
   fs.writeFileSync(vaultPath(), JSON.stringify(vault, null, 2), { mode: 0o600 });
 }
 
-function saveCredentialSecret(id, secret) {
+function vaultKey(userId, credentialId) {
+  return `${userId}:${credentialId}`;
+}
+
+function saveCredentialSecret(userId, credentialId, secret) {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('OS secure storage is not available on this desktop session');
   }
   const vault = readVault();
-  vault[id] = safeStorage.encryptString(JSON.stringify(secret)).toString('base64');
+  vault[vaultKey(userId, credentialId)] = safeStorage.encryptString(JSON.stringify(secret)).toString('base64');
   writeVault(vault);
 }
 
-function readCredentialSecret(id) {
+function readCredentialSecret(userId, credentialId) {
   const vault = readVault();
-  if (!vault[id]) throw new Error('Credential secret is not available in this OS keychain');
-  return JSON.parse(safeStorage.decryptString(Buffer.from(vault[id], 'base64')));
+  const entry = vault[vaultKey(userId, credentialId)] || vault[credentialId];
+  if (!entry) throw new Error('Credential secret is unavailable');
+  try {
+    return JSON.parse(safeStorage.decryptString(Buffer.from(entry, 'base64')));
+  } catch {
+    throw new Error('Credential secret is unavailable');
+  }
 }
 
-function removeCredentialSecret(id) {
+function removeCredentialSecret(userId, credentialId) {
   const vault = readVault();
-  delete vault[id];
+  delete vault[vaultKey(userId, credentialId)];
+  delete vault[credentialId];
   writeVault(vault);
 }
 

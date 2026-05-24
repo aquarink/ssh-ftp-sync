@@ -32,6 +32,61 @@ Several features are implemented but still considered experimental:
 
 The API and storage model may still change while the project evolves into a stable open source architecture.
 
+## Phase 1.1 — Smart Identity Engine
+
+What was built:
+
+- A scoped Smart Identity Engine that resolves credential material only at connection time.
+- Browser and Electron runtime-specific identity resolution paths.
+- Host-to-identity enforcement so a host only offers its assigned identity or an explicitly selected identity.
+- Secret-safe identity listing that returns metadata, fingerprints, and host assignment counts only.
+- Browser SSH relay and SFTP paths that now resolve through the identity engine instead of directly reusing arbitrary key material.
+- Electron desktop SSH paths that resolve through local secure storage with user-scoped vault keys.
+
+Main files changed:
+
+- `server/identityResolver.js`
+- `server/securityLog.js`
+- `server/index.js`
+- `server/sshWebSocket.js`
+- `server/credentialStore.js`
+- `electron/identityResolver.js`
+- `electron/credentialVault.js`
+- `electron/sshHandler.js`
+- `electron/terminalSessionManager.js`
+- `src/components/KeychainPanel.tsx`
+- `src/components/TerminalView.tsx`
+- `src/App.tsx`
+- `src/lib/api.ts`
+
+Security decision:
+
+- No auto-offer of all keys or identities.
+- No secret material is returned by identity list endpoints.
+- Browser runtime is limited to server-encrypted vault material.
+- Electron runtime is limited to local secure storage and scoped host resolution.
+- Logging is metadata-only and redacted.
+
+Limitation:
+
+- One-time identity flows are only partially modeled and still require a future transient-credential workflow.
+- Password-only host persistence remains a legacy compatibility path and is not the preferred secure flow.
+- Electron host ownership validation depends on user-scoped state passed from the renderer.
+
+Next work:
+
+- Secure Vault hardening.
+- Key Isolation.
+- Session cleanup lifecycle review.
+- One-time identity / transient connect flow.
+- SSH certificate identity expansion.
+
+Research basis:
+
+- Practical Privacy-Preserving Authentication for SSH
+- On the Security of SSH Client Signatures
+- Enabling Secure Shell Access with OpenID Connect
+
 ## Current Architecture
 
 - React, TypeScript, Vite, TailwindCSS, and Electron provide the UI shell.

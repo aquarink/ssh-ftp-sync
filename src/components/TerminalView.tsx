@@ -8,10 +8,12 @@ interface TerminalViewProps {
   sessionId: string;
   hostId: string;
   host?: {
+    userId?: string;
     host: string;
     port: number;
     username: string;
     password?: string;
+    authType?: string;
     credentialId?: string | null;
   };
   active: boolean;
@@ -139,17 +141,24 @@ export function TerminalView({
     if (window.ipcRenderer && host) {
       window.ipcRenderer.send('ssh-connect', {
         id: sessionId,
+        userId: host.userId,
+        hostUserId: host.userId,
         hostId,
         host: host.host,
         port: host.port,
         username: host.username,
-        password: host.password,
+        authType: host.authType,
         credentialId: host.credentialId,
+        purpose: 'ssh',
       });
     }
 
     if (!window.ipcRenderer) {
-      socket = new WebSocket(sshSocketUrl(hostId, sessionId));
+      const socketUrl = new URL(sshSocketUrl(hostId, sessionId));
+      if (host?.credentialId) socketUrl.searchParams.set('credentialId', host.credentialId);
+      if (host?.authType) socketUrl.searchParams.set('authType', host.authType);
+      socketUrl.searchParams.set('purpose', 'ssh');
+      socket = new WebSocket(socketUrl.toString());
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data) as SshSocketMessage;

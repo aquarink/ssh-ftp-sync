@@ -50,7 +50,11 @@ function saveCredentialSecret(credentialId, secret) {
 }
 
 function readCredentialSecret(storageRef) {
-  return decryptSecret(JSON.parse(fs.readFileSync(storagePath(storageRef), 'utf8')));
+  try {
+    return decryptSecret(JSON.parse(fs.readFileSync(storagePath(storageRef), 'utf8')));
+  } catch {
+    throw Object.assign(new Error('Credential secret is unavailable'), { status: 400 });
+  }
 }
 
 function removeCredentialSecret(storageRef) {

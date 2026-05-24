@@ -1,50 +1,117 @@
 const { ipcMain } = require('electron');
+const { Client } = require('ssh2');
 const { runSftpOperation } = require('../server/sftpService');
-const { readCredentialSecret, removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
+const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
 const { TerminalSessionManager } = require('./terminalSessionManager');
+const { resolveIdentity } = require('./identityResolver');
 
 const terminalSessions = new TerminalSessionManager();
 
-ipcMain.on('ssh-connect', (event, { id, hostId, host, port, username, password, privateKey, credentialId }) => {
-  let resolvedSecret = {};
+function testSshConnection(config) {
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    const timer = setTimeout(() => {
+      conn.end();
+      reject(new Error('SSH connection timed out'));
+    }, 15000);
+    conn.once('ready', () => {
+      clearTimeout(timer);
+      conn.end();
+      resolve();
+    });
+    conn.once('error', (error) => {
+      clearTimeout(timer);
+      reject(new Error(error.message || 'SSH connection failed'));
+    });
+    conn.connect({
+      host: config.host,
+      port: config.port || 22,
+      username: config.username,
+      password: config.password || undefined,
+      privateKey: config.privateKey || undefined,
+      passphrase: config.passphrase || undefined,
+      cert: config.cert || undefined,
+      agent: config.agent || undefined,
+      readyTimeout: 15000,
+    });
+  });
+}
+
+ipcMain.on('ssh-connect', (event, payload) => {
+  const { id, userId, hostId, hostUserId, authType, credentialId, purpose } = payload;
   try {
-    if (!password && !privateKey && credentialId) {
-      resolvedSecret = readCredentialSecret(credentialId);
-      if (resolvedSecret.type === 'agent') {
-        resolvedSecret.agent = process.platform === 'win32' ? 'pageant' : process.env.SSH_AUTH_SOCK;
-        if (!resolvedSecret.agent) throw new Error('SSH agent is not available on this desktop session');
-      }
-    }
+    const resolved = resolveIdentity({
+      userId,
+      hostId,
+      hostUserId,
+      runtime: 'electron',
+      authType,
+      credentialId,
+      purpose: purpose || 'ssh',
+    });
+
+    terminalSessions.connect(id, {
+      userId,
+      hostId,
+      hostUserId,
+      host: payload.host,
+      port: payload.port,
+      username: payload.username,
+      authType,
+      credentialId,
+      ...resolved.connection,
+    }, {
+      onConnected: (sessionId) => event.reply('ssh-connected', { id: sessionId }),
+      onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
+      onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
+      onData: (sessionId, data) => event.reply('ssh-data', { id: sessionId, data }),
+    });
   } catch (error) {
     event.reply('ssh-error', { id, message: error.message });
     return;
   }
+});
 
-  terminalSessions.connect(id, { hostId, host, port, username, password, privateKey, ...resolvedSecret }, {
-    onConnected: (sessionId) => event.reply('ssh-connected', { id: sessionId }),
-    onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
-    onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
-    onData: (sessionId, data) => event.reply('ssh-data', { id: sessionId, data }),
+ipcMain.handle('credential-save-secret', async (event, { userId, id, secret }) => {
+  if (!userId) throw new Error('User context is required to store a credential secret');
+  saveCredentialSecret(userId, id, secret);
+  return { ok: true };
+});
+
+ipcMain.handle('identity-save-secret', async (event, { userId, id, secret }) => {
+  if (!userId) throw new Error('User context is required to store an identity secret');
+  saveCredentialSecret(userId, id, secret);
+  return { ok: true };
+});
+
+ipcMain.handle('credential-remove-secret', async (event, { userId, id }) => {
+  if (!userId) throw new Error('User context is required to remove a credential secret');
+  removeCredentialSecret(userId, id);
+  return { ok: true };
+});
+
+ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
+  if (!userId) throw new Error('User context is required to remove an identity secret');
+  removeCredentialSecret(userId, id);
+  return { ok: true };
+});
+
+ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, credentialId, authType, host, port, username }) => {
+  const resolved = resolveIdentity({
+    userId,
+    hostId,
+    hostUserId,
+    runtime: 'electron',
+    authType,
+    credentialId,
+    purpose: 'test_connection',
   });
-});
-
-ipcMain.handle('credential-save-secret', async (event, { id, secret }) => {
-  saveCredentialSecret(id, secret);
-  return { ok: true };
-});
-
-ipcMain.handle('identity-save-secret', async (event, { id, secret }) => {
-  saveCredentialSecret(id, secret);
-  return { ok: true };
-});
-
-ipcMain.handle('credential-remove-secret', async (event, { id }) => {
-  removeCredentialSecret(id);
-  return { ok: true };
-});
-
-ipcMain.handle('identity-remove-secret', async (event, { id }) => {
-  removeCredentialSecret(id);
+  await testSshConnection({
+    host,
+    port,
+    username,
+    ...resolved.connection,
+  });
   return { ok: true };
 });
 
