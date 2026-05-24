@@ -9,6 +9,8 @@ const issueLimitPerHost = Number(process.env.CONNECT_ISSUE_LIMIT_PER_HOST || 8);
 const connectLimitPerUser = Number(process.env.CONNECT_ATTEMPT_LIMIT_PER_USER || 20);
 const connectLimitPerHost = Number(process.env.CONNECT_ATTEMPT_LIMIT_PER_HOST || 12);
 const rateStore = new Map();
+const allowedPurposes = new Set(['ssh', 'sftp', 'test_connection']);
+const allowedRuntimes = new Set(['browser', 'electron']);
 
 function rateKey(kind, scope) {
   return `${kind}:${scope}`;
@@ -36,24 +38,64 @@ function rejectAccess(reason, details = {}) {
   });
 }
 
-async function issueConnectAuthorization(userId, body = {}) {
+function invalidRequest(message = 'Invalid connect token request') {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+function validateConnectTokenRequest(body = {}) {
+  const hostId = typeof body.hostId === 'string' ? body.hostId.trim() : '';
+  if (!hostId) {
+    throw invalidRequest();
+  }
+
   const runtime = normalizeRuntime(body.runtime);
-  const purpose = body.purpose || 'ssh';
-  const host = await loadHost(userId, body.hostId);
-  const authType = normalizeAuthType(body.authType || host.authType || null);
-  const credentialId = body.credentialId || host.credentialId || null;
+  if (!allowedRuntimes.has(String(body.runtime || '').trim().toLowerCase())) {
+    throw invalidRequest();
+  }
+
+  const purpose = typeof body.purpose === 'string' && body.purpose.trim() ? body.purpose.trim() : 'ssh';
+  if (!allowedPurposes.has(purpose)) {
+    throw invalidRequest();
+  }
+
+  const rawAuthType = body.authType;
+  const authType = rawAuthType == null || rawAuthType === ''
+    ? null
+    : normalizeAuthType(rawAuthType);
+  if (rawAuthType != null && rawAuthType !== '' && !authType) {
+    throw invalidRequest();
+  }
+
+  const credentialId = body.credentialId == null || body.credentialId === ''
+    ? null
+    : String(body.credentialId).trim();
+
+  return {
+    hostId,
+    runtime,
+    purpose,
+    authType,
+    credentialId,
+  };
+}
+
+async function issueConnectAuthorization(userId, body = {}) {
+  const request = validateConnectTokenRequest(body);
+  const host = await loadHost(userId, request.hostId);
+  const authType = request.authType || normalizeAuthType(host.authType || null);
+  const credentialId = request.credentialId || host.credentialId || null;
 
   checkRateLimit('issue-user', userId, issueLimitPerUser);
   checkRateLimit('issue-host', `${userId}:${host.id}`, issueLimitPerHost);
 
-  const runtimePolicy = validateRuntimePolicy({ runtime, authType, purpose });
+  const runtimePolicy = validateRuntimePolicy({ runtime: request.runtime, authType, purpose: request.purpose });
   if (!runtimePolicy.ok) {
     rejectAccess('runtime_policy_denied', {
       userId,
       hostId: host.id,
-      runtime,
+      runtime: request.runtime,
       authType,
-      purpose,
+      purpose: request.purpose,
     });
     throw Object.assign(new Error('Runtime policy denied connect authorization'), { status: 403 });
   }
@@ -65,19 +107,20 @@ async function issueConnectAuthorization(userId, body = {}) {
   return issueAuthorizedConnectToken(userId, {
     hostId: host.id,
     credentialId,
-    runtime,
-    purpose,
+    runtime: request.runtime,
+    purpose: request.purpose,
     authType,
   });
 }
 
 async function authorizeConnectRequest(userId, body = {}) {
-  const runtime = normalizeRuntime(body.runtime);
-  const purpose = body.purpose || 'ssh';
-  const hostId = body.hostId;
-  const authType = normalizeAuthType(body.authType || null);
-  const credentialId = body.credentialId || null;
-  const connectToken = body.connectToken || null;
+  const request = validateConnectTokenRequest(body);
+  const runtime = request.runtime;
+  const purpose = request.purpose;
+  const hostId = request.hostId;
+  const authType = request.authType;
+  const credentialId = request.credentialId;
+  const connectToken = body.connectToken || body.token || null;
 
   if (!connectToken) {
     rejectAccess('missing_token', {
@@ -168,4 +211,5 @@ module.exports = {
   invalidateConnectAuthorizationsByHost,
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
+  validateConnectTokenRequest,
 };

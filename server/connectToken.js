@@ -3,8 +3,13 @@ const { pool } = require('./db');
 const { logAccessEvent } = require('./securityLog');
 const { incrementMetric } = require('./securityMetrics');
 
-const connectTokenSecret = process.env.CONNECT_TOKEN_SECRET || randomBytes(32).toString('hex');
+const connectTokenSecret =
+  process.env.SESSION_SECRET ||
+  process.env.APP_SECRET ||
+  process.env.CONNECT_TOKEN_SECRET ||
+  randomBytes(32).toString('hex');
 const tokenTtlMs = Number(process.env.CONNECT_TOKEN_TTL_MS || 60_000);
+const tokenTtlSeconds = Math.max(1, Math.ceil(tokenTtlMs / 1000));
 const tokenSweepMs = Number(process.env.CONNECT_TOKEN_SWEEP_MS || 30_000);
 const tokenStore = new Map();
 
@@ -136,6 +141,7 @@ function issueConnectToken(scope) {
     token,
     tokenId,
     expiresAt: new Date(expiresAt).toISOString(),
+    ttlSeconds: tokenTtlSeconds,
     scope: normalizedScope,
   };
 }
@@ -222,6 +228,7 @@ function consumeConnectToken(token, expectedScope = {}) {
     tokenId: payload.id,
     scope: entry.scope,
     expiresAt: new Date(entry.expiresAt).toISOString(),
+    ttlSeconds: tokenTtlSeconds,
   };
 }
 
@@ -299,4 +306,5 @@ module.exports = {
   loadIdentity,
   normalizeScope,
   scopeMatches,
+  tokenTtlSeconds,
 };
