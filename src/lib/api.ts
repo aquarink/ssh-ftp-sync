@@ -126,7 +126,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (!contentType.includes('application/json')) {
       const text = await response.text().catch(() => '');
       const server = response.headers.get('server');
-      const source = server?.toLowerCase().includes('nginx') ? ' from nginx/ModSecurity' : '';
+      const isNginx = server?.toLowerCase().includes('nginx');
+      const source = isNginx
+        ? response.status === 403
+          ? ' from nginx/ModSecurity'
+          : ' from nginx upstream proxy'
+        : '';
       const excerpt = text.replace(/\s+/g, ' ').trim().slice(0, 160);
       throw new Error(`Request failed with status ${response.status} ${response.statusText}${source}${excerpt ? `: ${excerpt}` : ''}`);
     }

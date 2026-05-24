@@ -138,34 +138,10 @@ async function authorizeConnectRequest(userId, body = {}) {
     checkRateLimit('connect-host', `${userId}:${hostId}`, connectLimitPerHost);
   }
 
-  const runtimePolicy = validateRuntimePolicy({ runtime, authType, purpose });
-  if (!runtimePolicy.ok) {
-    rejectAccess('runtime_policy_denied', {
-      userId,
-      hostId: hostId || null,
-      runtime,
-      authType,
-      purpose,
-    });
-    throw Object.assign(new Error('Runtime policy denied connect request'), { status: 403 });
-  }
-
-  const consumed = consumeConnectToken(connectToken, {
-    userId,
-    hostId: hostId || null,
-    identityId: credentialId || null,
-    credentialId: credentialId || null,
-    runtime,
-    purpose,
-    authType,
-  });
-
   const host = await loadHost(userId, hostId);
   const hostAuthType = normalizeAuthType(host.authType || null);
   const selectedCredentialId = credentialId || host.credentialId || null;
-  if (selectedCredentialId) {
-    await loadIdentity(userId, selectedCredentialId);
-  }
+  const effectiveAuthType = authType || hostAuthType || null;
 
   if (hostAuthType && authType && hostAuthType !== authType) {
     rejectAccess('scope_mismatch', {
@@ -178,10 +154,36 @@ async function authorizeConnectRequest(userId, body = {}) {
     throw Object.assign(new Error('Connect authorization auth type mismatch'), { status: 403 });
   }
 
+  const runtimePolicy = validateRuntimePolicy({ runtime, authType: effectiveAuthType, purpose });
+  if (!runtimePolicy.ok) {
+    rejectAccess('runtime_policy_denied', {
+      userId,
+      hostId: hostId || null,
+      runtime,
+      authType: effectiveAuthType,
+      purpose,
+    });
+    throw Object.assign(new Error('Runtime policy denied connect request'), { status: 403 });
+  }
+
+  if (selectedCredentialId) {
+    await loadIdentity(userId, selectedCredentialId);
+  }
+
+  const consumed = consumeConnectToken(connectToken, {
+    userId,
+    hostId: hostId || null,
+    identityId: selectedCredentialId,
+    credentialId: selectedCredentialId,
+    runtime,
+    purpose,
+    authType: effectiveAuthType,
+  });
+
   return {
     host,
     credentialId: selectedCredentialId,
-    authType: authType || hostAuthType || null,
+    authType: effectiveAuthType,
     runtime,
     purpose,
     connectTokenId: consumed.tokenId,

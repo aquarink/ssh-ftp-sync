@@ -33,6 +33,12 @@ function sign(payloadSegment) {
   return createHmac('sha256', connectTokenSecret).update(payloadSegment).digest('base64url');
 }
 
+function normalizeAuthType(authType) {
+  if (!authType) return null;
+  const value = String(authType).trim();
+  return value === 'credential' ? 'identity' : value;
+}
+
 function normalizeScope(scope = {}) {
   return {
     userId: scope.userId || null,
@@ -41,7 +47,7 @@ function normalizeScope(scope = {}) {
     credentialId: scope.credentialId || null,
     runtime: scope.runtime === 'electron' ? 'electron' : 'browser',
     purpose: scope.purpose || 'ssh',
-    authType: scope.authType || null,
+    authType: normalizeAuthType(scope.authType),
   };
 }
 
