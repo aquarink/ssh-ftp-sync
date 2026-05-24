@@ -10,6 +10,40 @@ Ant Tech Async SSH Client is an experimental open source SSH/SFTP/FTP client for
 
 The project is inspired by the operational workflows of tools such as Termius, MobaXterm, Tabby, and VSCode Remote, while remaining an original implementation focused on self-hosted control, modular architecture, and research-friendly extensibility.
 
+## What This Project Is
+
+- A self-hosted SSH/SFTP/FTP management app with browser and desktop modes.
+- A single repository that contains the frontend, backend API, and Electron desktop shell.
+- A research-oriented security project that implements identity scoping, secure secret storage, key isolation, session cleanup, and zero-trust access.
+- A Node.js backend is part of the project. It is not a separate external service.
+
+## How It Works
+
+1. The React frontend in `src/` renders the landing page, auth screens, host manager, terminal UI, and file manager.
+2. The Node HTTP API in `server/` handles auth, sessions, hosts, credentials, connect tokens, browser SSH relay, and SFTP operations.
+3. Browser mode uses `/api/ssh` as an authenticated WebSocket relay and `/api/security/connect-token` for short-lived connect authorization.
+4. Electron mode uses the main process in `electron/` plus the local API on `127.0.0.1:8790` for token issuance and SFTP authorization.
+5. SSH, SFTP, and identity flows all resolve secret material only when needed, then clean it up after use.
+
+## Core Files
+
+| Path | Role |
+| --- | --- |
+| `src/App.tsx` | Main app shell, route handling, host/terminal layout, and mode switching. |
+| `src/components/LandingPage.tsx` | Public landing page and feature showcase. |
+| `src/components/TerminalView.tsx` | Terminal UI and SSH connect lifecycle for browser/desktop. |
+| `src/components/SftpFileManager.tsx` | File manager UI and SFTP operation flow. |
+| `src/lib/api.ts` | Browser API client for auth, hosts, security, and SFTP calls. |
+| `server/index.js` | Main Node HTTP API router. |
+| `server/sshWebSocket.js` | Browser SSH relay over WebSocket. |
+| `server/accessPolicy.js` | Connect-token issuance and scope validation. |
+| `server/connectToken.js` | Token creation, validation, and invalidation. |
+| `server/identityResolver.js` | Host/identity resolution and secret material loading. |
+| `server/sftpService.js` | SFTP backend operations. |
+| `electron/main.js` | Electron main entrypoint. |
+| `electron/sshHandler.js` | Electron SSH and SFTP IPC bridge. |
+| `electron/credentialVault.js` | Electron secure storage helper. |
+
 ## Implemented Features
 
 - Multiple SSH tabs and multi-session terminal management.
@@ -62,7 +96,7 @@ Screenshots will be added as the open source UI stabilizes.
 | Deployment | Nginx |
 | Security Add-ons | HttpOnly cookies, Turnstile, optional Nginx WAF |
 
-## Installation
+## Run It
 
 ### Prerequisites
 
@@ -98,11 +132,19 @@ Edit `.env` with your local values.
 npm run migrate
 ```
 
-### Start Development API
+### Start the API
+
+This project does not require `pm2`. The API is a plain Node.js process started by the repo scripts.
 
 ```bash
 npm run api
 ```
+
+What this starts:
+
+- The backend HTTP API on `API_PORT` from `.env` or `8790` by default.
+- Auth/session routes, host routes, connect-token routes, browser SSH relay, and SFTP endpoints.
+- The same API used by both browser mode and Electron mode.
 
 ### Start Browser Development UI
 
@@ -128,15 +170,36 @@ npm run desktop
 npm run build
 ```
 
+### Full Local Flow
+
+If you want to run everything locally from scratch:
+
+1. Clone the repository.
+2. Install dependencies with `npm install`.
+3. Copy `.env.example` to `.env` and fill in MySQL and secret values.
+4. Run migrations with `npm run migrate`.
+5. Start the API with `npm run api`.
+6. Start the browser UI with `npm run dev`, or start the desktop app with `npm run desktop`.
+7. Open `http://127.0.0.1:5173/` for browser mode.
+8. Use Electron mode when you want the desktop shell and OS-backed secure storage.
+
 ### Production Notes
 
 For production-style browser deployment:
 
 1. Build the Vite app.
 2. Serve `dist/` from Nginx.
-3. Proxy `/api/` and `/api/ssh` to the Node API.
+3. Proxy `/api/` and `/api/ssh` to the Node API process.
 4. Run migrations before deploying backend changes.
-5. Use strong secrets and a secure vault key.
+5. Start the API with your preferred process manager, init system, or service manager.
+6. Use strong secrets and a secure vault key.
+
+Examples of how the API can be kept running:
+
+- `npm run api` in a terminal during development.
+- `nohup npm run api >/tmp/ant-tech-async-api.log 2>&1 &` for a simple detached process.
+- `systemd`, Docker, or another host-level service manager in production.
+- `pm2` is optional if you want to use it, but this repository does not depend on it.
 
 ## Environment Variables
 
