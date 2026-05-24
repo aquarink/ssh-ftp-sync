@@ -1,7 +1,7 @@
 import { ArrowRight, DatabaseZap, KeyRound, Layers, Monitor, ShieldCheck, Terminal, Users, Workflow } from 'lucide-react';
 
 interface LandingPageProps {
-  onNavigate: (path: string) => void;
+  onNavigate: (path: string, options?: { reload?: boolean }) => void;
 }
 
 export function LandingPage({ onNavigate }: LandingPageProps) {
@@ -24,8 +24,26 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
           <span className="font-semibold text-white">Ant Tech Async</span>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => onNavigate('/login')} className="px-3 py-2 text-sm text-textMuted hover:text-white">Login</button>
-          <button onClick={() => onNavigate('/register')} className="px-3 py-2 text-sm rounded-md bg-primary text-background font-medium hover:bg-primary/90">Register</button>
+          <a
+            href="/login"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate('/login');
+            }}
+            className="px-3 py-2 text-sm text-textMuted hover:text-white"
+          >
+            Login
+          </a>
+          <a
+            href="/register"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate('/register');
+            }}
+            className="px-3 py-2 text-sm rounded-md bg-primary text-background font-medium hover:bg-primary/90"
+          >
+            Register
+          </a>
         </div>
       </header>
 
@@ -42,10 +60,26 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
                 Manage Linux and Windows servers with multiple SSH tabs, integrated SFTP/FTP file management, private key authentication, and browser preview mode.
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
-                <button onClick={() => onNavigate('/login')} className="px-5 py-3 rounded-md bg-primary text-background font-semibold flex items-center gap-2 hover:bg-primary/90">
+                <a
+                  href="/login"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate('/login');
+                  }}
+                  className="px-5 py-3 rounded-md bg-primary text-background font-semibold inline-flex items-center gap-2 hover:bg-primary/90"
+                >
                   Get Started <ArrowRight size={18} />
-                </button>
-                <button onClick={() => onNavigate('/register')} className="px-5 py-3 rounded-md border border-border text-white hover:bg-white/5">Create Account</button>
+                </a>
+                <a
+                  href="/register"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate('/register');
+                  }}
+                  className="px-5 py-3 rounded-md border border-border text-white hover:bg-white/5"
+                >
+                  Create Account
+                </a>
               </div>
             </div>
 
@@ -119,7 +153,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
         </section>
       </main>
 
-      <footer className="border-t border-border px-6 py-6 text-xs text-textMuted flex justify-between">
+      <footer className="border-t border-border px-6 py-6 text-xs text-textMuted flex flex-col gap-2 sm:flex-row sm:justify-between">
         <span>Ant Tech Async</span>
         <span>SSH/SFTP/FTP for desktop and browser preview</span>
       </footer>

@@ -21,6 +21,7 @@ interface SshTab {
 const DEFAULT_TERMINAL_FONT_SIZE = 14;
 const MIN_TERMINAL_FONT_SIZE = 8;
 const MAX_TERMINAL_FONT_SIZE = 40;
+const DEFAULT_TERMINAL_BOTTOM_PADDING_PX = 32;
 
 function App() {
   const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
@@ -48,6 +49,7 @@ function App() {
     const val = localStorage.getItem('leftSidebarWidth');
     return val ? parseInt(val) : 288;
   });
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
 
   const [rightPanelVisible, setRightPanelVisible] = useState(() => {
     const val = localStorage.getItem('rightPanelVisible');
@@ -106,12 +108,20 @@ function App() {
   const [fNotes, setFNotes] = useState('');
   const [fTags, setFTags] = useState('');
 
-  const navigate = (path: string) => {
-    window.history.pushState({}, '', path);
+  const navigate = (path: string, options?: { reload?: boolean; replace?: boolean }) => {
+    if (options?.reload) {
+      if (options.replace) window.location.replace(path);
+      else window.location.assign(path);
+      return;
+    }
+
+    if (options?.replace) window.history.replaceState({}, '', path);
+    else window.history.pushState({}, '', path);
     setRoute(path);
   };
 
-  const isHostSidebarExpanded = !leftSidebarCollapsed && (leftSidebarPinned || isHostSidebarHovered);
+  const isTabletViewport = viewportWidth < 1280;
+  const isHostSidebarExpanded = !leftSidebarCollapsed && (leftSidebarPinned || isHostSidebarHovered || isTabletViewport);
 
   useEffect(() => {
     localStorage.setItem('leftSidebarPinned', String(leftSidebarPinned));
@@ -132,6 +142,13 @@ function App() {
   useEffect(() => {
     localStorage.setItem('terminalFontSize', String(terminalFontSize));
   }, [terminalFontSize]);
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    updateViewportWidth();
+    window.addEventListener('resize', updateViewportWidth);
+    return () => window.removeEventListener('resize', updateViewportWidth);
+  }, []);
 
   // Extract all unique tags from hosts
   const allTags = useMemo(() => {
@@ -292,7 +309,7 @@ function App() {
         turnstileWidgetId.current = '';
       }
     };
-  }, [session, turnstileSiteKey]);
+  }, [session, turnstileSiteKey, route]);
 
   const resetTurnstile = () => {
     setTurnstileToken('');
@@ -406,7 +423,7 @@ function App() {
     }
     await api.logout();
     setSession(null);
-    navigate('/');
+    navigate('/', { replace: true });
   };
 
   const resetHostForm = () => {
@@ -639,7 +656,7 @@ function App() {
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-primary/10 blur-[120px] pointer-events-none"></div>
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-purple-500/10 blur-[120px] pointer-events-none"></div>
 
-        <div className="bg-surface/80 backdrop-blur-md border border-border rounded-2xl w-[400px] shadow-2xl p-8 flex flex-col z-10 transition-all duration-300">
+        <div key={route} className="bg-surface/80 backdrop-blur-md border border-border rounded-2xl w-[400px] shadow-2xl p-8 flex flex-col z-10 transition-all duration-300">
           <div className="flex flex-col items-center mb-8">
             <div className="p-3 bg-primary/10 text-primary rounded-2xl mb-3 shadow-lg shadow-primary/5">
               <Terminal size={32} />
@@ -705,6 +722,7 @@ function App() {
 
             {turnstileSiteKey ? (
               <div
+                key={`${route}-${authMode}`}
                 ref={turnstileRef}
                 className="min-h-[65px]"
               />
@@ -738,7 +756,7 @@ function App() {
               onClick={() => {
                 const nextPath = authMode === 'login' ? '/register' : '/login';
                 setAuthMode(authMode === 'login' ? 'register' : 'login');
-                navigate(nextPath);
+                navigate(nextPath, { replace: true });
                 setAuthError('');
                 setAuthNotice('');
                 setAuthPassword('');
@@ -756,7 +774,7 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen bg-background text-textMain font-sans overflow-hidden">
+    <div className="flex h-dvh w-full bg-background text-textMain font-sans overflow-hidden box-border p-3 md:p-4">
       {/* Sidebar */}
       <div className="w-16 bg-surface border-r border-border flex flex-col items-center py-4 space-y-6 shrink-0 z-10">
         <button onClick={() => navigate('/app')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="Terminals">
@@ -791,7 +809,7 @@ function App() {
         onMouseEnter={() => setIsHostSidebarHovered(true)}
         onMouseLeave={() => setIsHostSidebarHovered(false)}
         style={{
-          width: isHostSidebarExpanded ? `${leftSidebarWidth}px` : '72px'
+          width: isHostSidebarExpanded ? `${Math.min(leftSidebarWidth, 320)}px` : '72px'
         }}
         className={`relative bg-[#161b22]/90 border-r border-border flex flex-col shrink-0 transition-[width] duration-200 ease-out z-30 h-full ${
           !leftSidebarPinned && isHostSidebarHovered ? 'absolute left-16 shadow-2xl' : ''
@@ -1061,9 +1079,9 @@ function App() {
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 flex relative overflow-hidden">
+            <div className="flex-1 min-h-0 flex flex-col xl:flex-row relative overflow-hidden">
               {/* Terminal View */}
-              <div className="flex-1 relative bg-black min-w-0 h-full">
+              <div className="flex-1 relative bg-black min-w-0 min-h-[52vh] xl:min-h-0">
                 {sshTabs.map(tab => (
                   <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
                     {tab.status === 'connecting' && (
@@ -1087,6 +1105,7 @@ function App() {
                       host={tab.host}
                       active={activeTabId === tab.id}
                       fontSize={terminalFontSize}
+                      bottomPaddingPx={isTabletViewport ? 36 : DEFAULT_TERMINAL_BOTTOM_PADDING_PX}
                       onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '' })}
                       onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message })}
                       onClosed={() => updateTab(tab.id, { status: 'closed', errorMsg: 'SSH connection closed. Reconnect from the host list to open a new shell.' })}
@@ -1096,7 +1115,7 @@ function App() {
               </div>
 
               {/* Center-to-right Resize handle */}
-              {rightPanelVisible && rightPanelPinned && (
+              {rightPanelVisible && rightPanelPinned && !isTabletViewport && (
                 <div
                   onMouseDown={startRightResize}
                   className="w-[4px] h-full cursor-col-resize hover:bg-primary/50 transition-colors z-45 relative group shrink-0"
@@ -1108,11 +1127,15 @@ function App() {
               {/* FTP/SFTP Panel */}
               {rightPanelVisible ? (
                 <div
-                  style={{ width: `${rightPanelWidth}px` }}
-                  className={`h-full min-h-0 shrink-0 flex flex-col z-30 bg-[#161b22] overflow-hidden ${
-                    !rightPanelPinned
-                      ? 'absolute right-0 top-0 bottom-0 shadow-2xl border-l border-border'
-                      : 'border-l border-border relative'
+                  style={isTabletViewport ? undefined : { width: `${rightPanelWidth}px` }}
+                  className={`min-h-0 shrink-0 flex flex-col z-30 bg-[#161b22] overflow-hidden ${
+                    isTabletViewport
+                      ? 'w-full h-[38vh] max-h-[420px] border-t border-border'
+                      : `h-full ${
+                          !rightPanelPinned
+                            ? 'absolute right-0 top-0 bottom-0 shadow-2xl border-l border-border'
+                            : 'border-l border-border relative'
+                        }`
                   }`}
                 >
                   <SftpFileManager

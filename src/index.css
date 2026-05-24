@@ -12,3 +12,12 @@
     @apply bg-background text-textMain m-0 p-0 overflow-hidden font-sans min-h-full;
   }
 }
+
+.terminal-shell .xterm .xterm-viewport {
+  background-color: var(--terminal-background, #0d1117);
+  padding-bottom: var(--terminal-bottom-padding, 24px);
+}
+
+.terminal-shell .xterm {
+  background-color: var(--terminal-background, #0d1117);
+}

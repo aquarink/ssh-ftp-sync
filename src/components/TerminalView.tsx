@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
+import { Copy, Clipboard } from 'lucide-react';
 import 'xterm/css/xterm.css';
 
 interface TerminalViewProps {
@@ -15,6 +16,7 @@ interface TerminalViewProps {
   };
   active: boolean;
   fontSize: number;
+  bottomPaddingPx?: number;
   onConnected?: () => void;
   onError?: (message: string) => void;
   onClosed?: () => void;
@@ -31,11 +33,35 @@ function sshSocketUrl(hostId: string, sessionId: string) {
   return `${protocol}//${window.location.host}/api/ssh?hostId=${encodeURIComponent(hostId)}&sessionId=${encodeURIComponent(sessionId)}`;
 }
 
-export function TerminalView({ sessionId, hostId, host, active, fontSize, onConnected, onError, onClosed }: TerminalViewProps) {
+export function TerminalView({
+  sessionId,
+  hostId,
+  host,
+  active,
+  fontSize,
+  bottomPaddingPx = 24,
+  onConnected,
+  onError,
+  onClosed,
+}: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
   const activeRef = useRef(active);
+
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      setContextMenu(null);
+    };
+    window.addEventListener('mousedown', handleOutsideClick, { capture: true });
+    return () => {
+      window.removeEventListener('mousedown', handleOutsideClick, { capture: true });
+    };
+  }, []);
 
   useEffect(() => {
     activeRef.current = active;
@@ -69,6 +95,42 @@ export function TerminalView({ sessionId, hostId, host, active, fontSize, onConn
     
     term.current.open(terminalRef.current);
     fitAddon.current.fit();
+
+    const terminal = term.current;
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      
+      const isCopy = (isMac && event.metaKey && event.key === 'c') ||
+                     (!isMac && event.ctrlKey && event.shiftKey && event.key === 'C') ||
+                     (!isMac && event.ctrlKey && event.key === 'c' && terminal.hasSelection());
+
+      const isPaste = (isMac && event.metaKey && event.key === 'v') ||
+                      (!isMac && event.ctrlKey && event.shiftKey && event.key === 'V') ||
+                      (!isMac && event.ctrlKey && event.key === 'v');
+
+      if (isCopy) {
+        const selectedText = terminal.getSelection();
+        if (selectedText) {
+          navigator.clipboard.writeText(selectedText);
+        }
+        return false;
+      }
+
+      if (isPaste) {
+        navigator.clipboard.readText().then((text) => {
+          if (text) {
+            terminal.paste(text);
+          }
+        }).catch((err) => {
+          console.error('Failed to read clipboard:', err);
+        });
+        return false;
+      }
+
+      return true;
+    });
     let socket: WebSocket | null = null;
     let socketFailed = false;
 
@@ -208,5 +270,95 @@ export function TerminalView({ sessionId, hostId, host, active, fontSize, onConn
     });
   }, [fontSize, active, sessionId]);
 
-  return <div ref={terminalRef} className="w-full h-full p-2" />;
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!term.current) return;
+    
+    setHasSelection(term.current.hasSelection());
+    
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setContextMenu({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      });
+    }
+  };
+
+  const handleCopy = () => {
+    if (!term.current) return;
+    const selectedText = term.current.getSelection();
+    if (selectedText) {
+      navigator.clipboard.writeText(selectedText);
+    }
+    setContextMenu(null);
+    term.current.focus();
+  };
+
+  const handlePaste = () => {
+    if (!term.current) return;
+    navigator.clipboard.readText().then((text) => {
+      if (text && term.current) {
+        term.current.paste(text);
+      }
+    }).catch((err) => {
+      console.error('Failed to read clipboard:', err);
+    });
+    setContextMenu(null);
+    term.current.focus();
+  };
+
+  return (
+    <div 
+      ref={containerRef}
+      className="relative w-full h-full"
+      onContextMenu={handleContextMenu}
+    >
+      <div
+        ref={terminalRef}
+        className="terminal-shell w-full h-full px-3 pt-3 pb-4"
+        style={{
+          '--terminal-bottom-padding': `${bottomPaddingPx}px`,
+          '--terminal-background': '#0d1117',
+        } as CSSProperties}
+      />
+      {contextMenu && (
+        <div
+          className="absolute z-50 bg-[#161b22] border border-slate-700 rounded-lg shadow-xl py-1 text-sm text-slate-200 select-none animate-in fade-in zoom-in duration-100"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+            minWidth: '160px',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleCopy}
+            disabled={!hasSelection}
+            className="w-full text-left px-4 py-2 hover:bg-slate-800 disabled:opacity-50 disabled:hover:bg-transparent flex items-center justify-between transition-colors duration-150"
+          >
+            <span className="flex items-center gap-2">
+              <Copy size={14} />
+              Copy
+            </span>
+            <span className="text-xs text-slate-500 font-mono">
+              {navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘C' : 'Ctrl+Shift+C'}
+            </span>
+          </button>
+          <button
+            onClick={handlePaste}
+            className="w-full text-left px-4 py-2 hover:bg-slate-800 flex items-center justify-between transition-colors duration-150"
+          >
+            <span className="flex items-center gap-2">
+              <Clipboard size={14} />
+              Paste
+            </span>
+            <span className="text-xs text-slate-500 font-mono">
+              {navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘V' : 'Ctrl+Shift+V'}
+            </span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

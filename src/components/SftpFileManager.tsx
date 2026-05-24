@@ -267,7 +267,7 @@ export function SftpFileManager({
     <aside
       aria-hidden={!isVisible}
       data-mode={isPinned ? 'pinned' : 'overlay'}
-      className="h-full min-h-0 flex flex-col min-w-0 bg-[#161b22] text-textMain relative select-none overflow-hidden"
+      className="h-full min-h-0 flex flex-col min-w-0 bg-[#161b22] text-textMain relative select-none overflow-hidden pb-4"
     >
       {/* 1. Sticky Header */}
       <div className="h-12 border-b border-border px-3 flex items-center gap-2 shrink-0 bg-surface">
@@ -316,7 +316,7 @@ export function SftpFileManager({
       </div>
 
       {/* Actions Toolbar */}
-      <div className="px-3 py-1.5 border-b border-border grid grid-cols-7 gap-1 bg-surface/50 shrink-0">
+      <div className="px-3 py-1.5 border-b border-border grid grid-cols-4 sm:grid-cols-7 gap-1 bg-surface/50 shrink-0">
         <button onClick={() => fileInputRef.current?.click()} title="Upload files" className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-textMuted hover:text-white flex items-center justify-center cursor-pointer transition"><Upload size={14} /></button>
         <button onClick={downloadSelected} disabled={!selected} title="Download" className="p-1.5 rounded bg-white/5 hover:bg-white/10 disabled:opacity-40 text-textMuted hover:text-white flex items-center justify-center cursor-pointer transition"><Download size={14} /></button>
         <button onClick={() => folderInputRef.current?.click()} title="Upload folder" className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-textMuted hover:text-white flex items-center justify-center cursor-pointer transition"><FolderPlus size={14} /></button>
