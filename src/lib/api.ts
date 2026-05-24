@@ -26,6 +26,13 @@ export interface Host {
   updatedAt?: string;
 }
 
+export interface IdentityTestResult {
+  ok: true;
+  authType: string | null;
+  fingerprint: string | null;
+  message: string;
+}
+
 export interface ManagedUser extends User {
   createdAt: string;
   emailCheckResult?: string | null;
@@ -172,7 +179,7 @@ export const api = {
       method: 'DELETE',
     }),
   testIdentity: (id: string, payload: { host: string; port: number; username: string; runtime?: 'browser' | 'electron'; authType?: string }) =>
-    request<{ ok: true }>(`/api/identities/${encodeURIComponent(id)}/test`, {
+    request<IdentityTestResult>(`/api/identities/${encodeURIComponent(id)}/test`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

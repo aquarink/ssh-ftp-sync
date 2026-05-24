@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 const { logVaultEvent } = require('./securityLog');
+const { clearSecretMaterial } = require('./secretLifecycle');
 
 function vaultPath() {
   return path.join(app.getPath('userData'), 'ssh-credential-vault.json');
@@ -34,6 +35,8 @@ function saveCredentialSecret(userId, credentialId, secret) {
     logVaultEvent('save', { userId, credentialId, result: 'ok' });
   } catch {
     throw new Error('Vault is not ready');
+  } finally {
+    clearSecretMaterial(secret);
   }
 }
 

@@ -16,6 +16,7 @@ const { validateTurnstile } = require('./turnstile');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
 const { resolveIdentity } = require('./identityResolver');
+const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
 const { vaultHealthCheck } = require('./vaultHealth');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
 const {
@@ -119,6 +120,23 @@ function publicHost(row) {
     notes: row.notes,
     tags: row.tags,
     updatedAt: row.updatedAt,
+  };
+}
+
+function buildConnectConfig(host, material, extra = {}) {
+  return {
+    host: host.host,
+    port: host.port || 22,
+    username: host.username,
+    password: material?.password || undefined,
+    privateKey: material?.privateKey || undefined,
+    passphrase: material?.passphrase || undefined,
+    cert: material?.certificate || material?.cert || undefined,
+    agent: material?.agent || undefined,
+    readyTimeout: 15000,
+    keepaliveInterval: 25000,
+    keepaliveCountMax: 3,
+    ...extra,
   };
 }
 
@@ -593,33 +611,47 @@ async function assignIdentityToHost(req, res, hostId) {
   json(res, 200, { host: publicHost(updated[0]) });
 }
 
-function testSshConnection(config) {
+function testSshConnection(host, resolved, context = {}) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const timer = setTimeout(() => {
       conn.end();
-      reject(new Error('SSH connection timed out'));
+      reject(Object.assign(new Error('Connection failed after credential resolution'), { status: 400 }));
     }, 15000);
+
+    const finishWithFailure = (error) => {
+      clearTimeout(timer);
+      console.error('test-ssh-failed', redactSecretFields({
+        host,
+        username,
+        port,
+        message: error?.message || 'Connection failed after credential resolution',
+      }));
+      reject(Object.assign(new Error('Connection failed after credential resolution'), { status: 400 }));
+    };
+
     conn.once('ready', () => {
       clearTimeout(timer);
       conn.end();
       resolve();
     });
-    conn.once('error', (error) => {
-      clearTimeout(timer);
-      reject(new Error(error.message || 'SSH connection failed'));
-    });
-    conn.connect({
-      host: config.host,
-      port: config.port || 22,
-      username: config.username,
-      password: config.password || undefined,
-      privateKey: config.privateKey || undefined,
-      passphrase: config.passphrase || undefined,
-      cert: config.certificate || undefined,
-      agent: config.agent || undefined,
-      readyTimeout: 15000,
-    });
+    conn.once('error', finishWithFailure);
+    try {
+      conn.connect(buildConnectConfig(host, resolved.ephemeralCredential.material));
+    } finally {
+      const cleared = resolved.ephemeralCredential.clear();
+      logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
+        userId: context.userId || null,
+        hostId: context.hostId || host?.id || null,
+        credentialId: context.credentialId || resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: context.sessionId || resolved.ephemeralCredential.sessionId,
+        runtime: resolved.runtime,
+        purpose: resolved.purpose,
+        authType: resolved.authType,
+        result: cleared ? 'ok' : 'error',
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 }
 
@@ -638,20 +670,76 @@ async function testIdentity(req, res, id) {
     authType: body.authType || null,
     credentialId: id,
     purpose: 'test_connection',
+    sessionId: `test-${id}`,
   });
-  await testSshConnection({ host, username, port, ...resolved.connection });
-  logIdentityEvent('test', {
-    userId: user.id,
-    credentialId: id,
-    host,
-    port,
-    username,
-    authType: body.authType || null,
-    runtime: resolved.runtime,
-    purpose: 'test_connection',
-    result: 'ok',
-  });
-  json(res, 200, { ok: true });
+  try {
+    if (!resolved.ephemeralCredential) {
+      throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+    }
+    if (isEphemeralCredentialExpired(resolved.ephemeralCredential)) {
+      logIdentityEvent('credentialExpired', {
+        userId: user.id,
+        hostId: null,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: resolved.ephemeralCredential.sessionId,
+        runtime: resolved.runtime,
+        purpose: 'test_connection',
+        authType: resolved.authType,
+        result: 'error',
+        timestamp: new Date().toISOString(),
+      });
+      resolved.ephemeralCredential.clear();
+      throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+    }
+
+    await testSshConnection(
+      { host, username, port },
+      resolved,
+      { userId: user.id, hostId: null, credentialId: id, sessionId: resolved.ephemeralCredential.sessionId }
+    );
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: user.id,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+      sessionId: resolved.ephemeralCredential.sessionId,
+      runtime: resolved.runtime,
+      purpose: 'test_connection',
+      authType: resolved.authType,
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
+    json(res, 200, {
+      ok: true,
+      authType: resolved.authType,
+      fingerprint: resolved.credential?.fingerprint || resolved.credential?.publicKeyFingerprint || resolved.credential?.certificateFingerprint || null,
+      message: 'Credential material cleared after use',
+    });
+  } catch (error) {
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: user.id,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || id,
+      sessionId: resolved.ephemeralCredential?.sessionId || `test-${id}`,
+      runtime: resolved.runtime,
+      purpose: 'test_connection',
+      authType: resolved.authType,
+      result: 'error',
+      timestamp: new Date().toISOString(),
+    });
+    throw Object.assign(new Error('Connection failed after credential resolution'), { status: error.status || 400 });
+  } finally {
+    if (resolved.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
+      const cleared = resolved.ephemeralCredential.clear();
+      logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
+        userId: user.id,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: resolved.ephemeralCredential.sessionId,
+        runtime: resolved.runtime,
+        purpose: 'test_connection',
+        authType: resolved.authType,
+        result: cleared ? 'ok' : 'error',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
 }
 
 async function deleteHost(req, res, id) {
@@ -663,31 +751,94 @@ async function deleteHost(req, res, id) {
 }
 
 async function getUserHost(userId, hostId) {
-  const resolved = await resolveIdentity({
+  return resolveIdentity({
     userId,
     hostId,
     runtime: 'browser',
     purpose: 'sftp',
   });
-  if (!resolved.host) throw Object.assign(new Error('Host not found'), { status: 404 });
-  return {
-    id: resolved.host.id,
-    host: resolved.host.host,
-    port: resolved.host.port,
-    username: resolved.host.username,
-    authType: resolved.host.auth_type,
-    credentialId: resolved.host.credential_id,
-    ...resolved.connection,
-  };
 }
 
 async function sftpOperation(req, res, hostId, operation) {
   const user = await requireUser(req, res);
   if (!user) return;
 
-  const host = await getUserHost(user.id, hostId);
-  const result = await runSftpOperation(host, operation, await readJson(req));
-  json(res, 200, result);
+  const resolved = await getUserHost(user.id, hostId);
+  const payload = await readJson(req);
+  try {
+    if (!resolved.ephemeralCredential) {
+      throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+    }
+    if (isEphemeralCredentialExpired(resolved.ephemeralCredential)) {
+      resolved.ephemeralCredential.clear();
+      logIdentityEvent('credentialExpired', {
+        userId: user.id,
+        hostId: resolved.host?.id || hostId,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: resolved.ephemeralCredential.sessionId,
+        runtime: resolved.runtime,
+        purpose: resolved.purpose,
+        authType: resolved.authType,
+        result: 'error',
+        timestamp: new Date().toISOString(),
+      });
+      throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+    }
+
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: user.id,
+      hostId: resolved.host?.id || hostId,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+      sessionId: resolved.ephemeralCredential.sessionId,
+      runtime: resolved.runtime,
+      purpose: resolved.purpose,
+      authType: resolved.authType,
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await runSftpOperation({
+      host: resolved.host,
+      credential: resolved.ephemeralCredential,
+    }, operation, payload);
+    json(res, 200, result);
+  } catch (error) {
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: user.id,
+      hostId: resolved.host?.id || hostId,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || null,
+      sessionId: resolved.ephemeralCredential?.sessionId || `sftp-${hostId}`,
+      runtime: resolved.runtime,
+      purpose: resolved.purpose,
+      authType: resolved.authType,
+      result: 'error',
+      timestamp: new Date().toISOString(),
+    });
+    if (!error.status || error.status >= 500) {
+      console.error('sftp-error', redactSecretFields({
+        userId: user.id,
+        hostId,
+        operation,
+        message: error.message,
+      }));
+    }
+    throw error;
+  } finally {
+    if (resolved.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
+      const cleared = resolved.ephemeralCredential.clear();
+      logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
+        userId: user.id,
+        hostId: resolved.host?.id || hostId,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: resolved.ephemeralCredential.sessionId,
+        runtime: resolved.runtime,
+        purpose: resolved.purpose,
+        authType: resolved.authType,
+        result: cleared ? 'ok' : 'error',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
 }
 
 async function route(req, res) {

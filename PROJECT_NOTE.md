@@ -26,6 +26,41 @@
 
 - Electron renderer `userId` must remain advisory only. Prefer authenticated/session-derived context in the main process whenever available, and reject mismatches instead of trusting renderer payloads.
 
+## [2026-05-24] - Phase 1.3 - Key Isolation
+
+- Objective: isolate SSH/SFTP/identity secret material at runtime so decrypted password, private key, passphrase, certificate, token, and resolved credential data live only for the shortest possible scope.
+- Implementation summary: added ephemeral credential wrappers and lifecycle helpers for server and Electron runtimes, updated browser SSH relay and Electron SSH IPC to resolve-then-connect with cleanup, refreshed identity test and SFTP flows to resolve fresh credentials, and removed raw secret material from long-lived session state.
+- Architectural decision: keep Smart Identity Engine responsible for selection and Secure Vault responsible for storage, then add a separate Key Isolation layer that controls runtime exposure, TTL, and cleanup.
+- Security decision: no raw secret material is kept in session maps, reconnect state, WebSocket relay state, or renderer state; secret cleanup is best-effort and Buffer-based wipe is attempted where possible.
+- Research references:
+  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+  - On the Security of SSH Client Signatures
+  - Practical Privacy-Preserving Authentication for SSH
+  - Enabling Secure Shell Access with OpenID Connect
+  - Towards SSH3: how HTTP/3 improves secure shells
+- Files changed:
+  - `server/secretLifecycle.js`
+  - `server/ephemeralCredential.js`
+  - `server/identityResolver.js`
+  - `server/sshWebSocket.js`
+  - `server/sftpService.js`
+  - `server/index.js`
+  - `server/credentialStore.js`
+  - `electron/secretLifecycle.js`
+  - `electron/ephemeralCredential.js`
+  - `electron/identityResolver.js`
+  - `electron/terminalSessionManager.js`
+  - `electron/sshHandler.js`
+  - `electron/credentialVault.js`
+  - `src/components/TerminalView.tsx`
+  - `src/components/KeychainPanel.tsx`
+  - `src/lib/api.ts`
+  - `README.md`
+  - `PROJECT_STATE.md`
+- Acceptance test result: PASS for build/typecheck via `npm run build`; `npm run lint` could not run in this environment because `eslint` is not installed in the local toolchain; live SSH/SFTP verification remains pending against a configured target.
+- Known limitations: JavaScript strings cannot be reliably wiped from memory, Buffer wipe is best-effort, and live connection verification is still needed on a real host before treating the isolation layer as production-ready.
+- Future recommendations: implement Phase 1.4 Session Cleanup, strengthen process isolation, explore native secure memory handling, add key-agent policy controls, support transient one-time identities, and rotate vault material on a tighter cadence.
+
 ## Legacy Password Migration Note
 
 - Existing host password rows are migration-only compatibility data. The long-term direction is to backfill them into scoped identities or transient connection credentials, then retire the legacy host password path.

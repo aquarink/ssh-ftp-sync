@@ -1,6 +1,7 @@
 const path = require('path');
 const { Client } = require('ssh2');
 const AdmZip = require('adm-zip');
+const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
 
 const maxTextFileBytes = 2 * 1024 * 1024;
 
@@ -27,7 +28,23 @@ function mutableRemotePath(value) {
   return safePath;
 }
 
-function connectSftp(hostConfig) {
+function buildConnectConfig(hostConfig, material) {
+  return {
+    host: hostConfig.host,
+    port: hostConfig.port || 22,
+    username: hostConfig.username,
+    password: material?.password || undefined,
+    privateKey: material?.privateKey || undefined,
+    passphrase: material?.passphrase || undefined,
+    cert: material?.certificate || material?.cert || undefined,
+    agent: material?.agent || undefined,
+    readyTimeout: 15000,
+    keepaliveInterval: 25000,
+    keepaliveCountMax: 3,
+  };
+}
+
+function connectSftp(hostConfig, credential) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     conn.once('ready', () => {
@@ -41,24 +58,20 @@ function connectSftp(hostConfig) {
       });
     });
     conn.once('error', reject);
-    conn.connect({
-      host: hostConfig.host,
-      port: hostConfig.port || 22,
-      username: hostConfig.username,
-      password: hostConfig.password || undefined,
-      privateKey: hostConfig.privateKey || undefined,
-      passphrase: hostConfig.passphrase || undefined,
-      cert: hostConfig.certificate || undefined,
-      agent: hostConfig.agent || undefined,
-      readyTimeout: 15000,
-      keepaliveInterval: 25000,
-      keepaliveCountMax: 3,
-    });
+    conn.connect(buildConnectConfig(hostConfig, credential.material));
   });
 }
 
-async function withSftp(hostConfig, work) {
-  const { conn, sftp } = await connectSftp(hostConfig);
+async function withSftp(hostConfig, credential, work) {
+  if (!credential) {
+    throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+  }
+  if (isEphemeralCredentialExpired(credential)) {
+    credential.clear();
+    throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+  }
+
+  const { conn, sftp } = await connectSftp(hostConfig, credential);
   try {
     return await work(sftp);
   } finally {
@@ -278,7 +291,7 @@ const sftpOperations = {
 async function runSftpOperation(hostConfig, operation, payload = {}) {
   const handler = sftpOperations[operation];
   if (!handler) throw Object.assign(new Error('Unsupported SFTP operation'), { status: 400 });
-  return withSftp(hostConfig, (sftp) => handler(sftp, payload));
+  return withSftp(hostConfig.host, hostConfig.credential, (sftp) => handler(sftp, payload));
 }
 
 module.exports = {

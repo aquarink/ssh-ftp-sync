@@ -1,6 +1,8 @@
 const { pool } = require('./db');
 const { readCredentialSecret } = require('./credentialStore');
 const { logIdentityEvent } = require('./securityLog');
+const { clearSecretMaterial } = require('./secretLifecycle');
+const { createEphemeralCredential } = require('./ephemeralCredential');
 
 const supportedAuthTypes = new Set([
   'password',
@@ -133,6 +135,7 @@ async function resolveIdentity({
   authType = null,
   credentialId = null,
   purpose = 'ssh',
+  sessionId = null,
 }) {
   const normalizedRuntime = normalizeRuntime(runtime);
   const host = await loadHost(userId, hostId);
@@ -154,21 +157,34 @@ async function resolveIdentity({
 
   if (!selectedCredentialId) {
     if (normalizeHostAuthType(host?.auth_type) === 'password' && typeof host.password === 'string' && host.password) {
-      logIdentityEvent('resolve-password', {
+      const ephemeralCredential = createEphemeralCredential({
+        sessionId,
+        hostId: host?.id || null,
+        userId,
+        runtime: normalizedRuntime,
+        purpose,
+        authType: 'password',
+        material: { password: host.password },
+      });
+      host.password = '';
+      logIdentityEvent('credentialResolved', {
         userId,
         hostId: host?.id || null,
-        credentialId: null,
+        credentialId: ephemeralCredential.id,
+        sessionId: ephemeralCredential.sessionId,
         authType: 'password',
         runtime: normalizedRuntime,
         purpose,
         result: 'ok',
+        timestamp: new Date().toISOString(),
       });
       return {
         host,
         credential: null,
         authType: 'password',
         runtime: normalizedRuntime,
-        connection: { password: host.password },
+        purpose,
+        ephemeralCredential,
       };
     }
     if (normalizedAuthType === 'password') {
@@ -188,35 +204,61 @@ async function resolveIdentity({
   }
 
   const credential = await loadCredential(userId, selectedCredentialId);
-  const secret = readCredentialSecret(credential.storage_ref);
-  const connection = resolveSecretMaterial(credential, secret, normalizedRuntime);
+  let secret = null;
+  let material = null;
+  try {
+    secret = readCredentialSecret(credential.storage_ref);
+    material = resolveSecretMaterial(credential, secret, normalizedRuntime);
+    const ephemeralCredential = createEphemeralCredential({
+      sessionId,
+      hostId: host?.id || null,
+      userId,
+      runtime: normalizedRuntime,
+      purpose,
+      authType: normalizedAuthType || credential.type,
+      material,
+    });
+    if (host) {
+      host.password = '';
+    }
 
-  logIdentityEvent('resolve', {
-    userId,
-    hostId: host?.id || null,
-    credentialId: credential.id,
-    authType: normalizedAuthType,
-    runtime: normalizedRuntime,
-    purpose,
-    result: 'ok',
-  });
+    logIdentityEvent('credentialResolved', {
+      userId,
+      hostId: host?.id || null,
+      credentialId: credential.id,
+      sessionId: ephemeralCredential.sessionId,
+      authType: normalizedAuthType || credential.type,
+      runtime: normalizedRuntime,
+      purpose,
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
 
-  return {
-    host,
-    credential: {
-      id: credential.id,
-      type: credential.type,
-      label: credential.label,
-      username: credential.username,
-      fingerprint: credential.fingerprint,
-      publicKeyFingerprint: credential.public_key_fingerprint,
-      certificateFingerprint: credential.certificate_fingerprint,
-      notes: credential.notes,
-    },
-    authType: normalizedAuthType,
-    runtime: normalizedRuntime,
-    connection,
-  };
+    return {
+      host,
+      credential: {
+        id: credential.id,
+        type: credential.type,
+        label: credential.label,
+        username: credential.username,
+        fingerprint: credential.fingerprint,
+        publicKeyFingerprint: credential.public_key_fingerprint,
+        certificateFingerprint: credential.certificate_fingerprint,
+        notes: credential.notes,
+      },
+      authType: normalizedAuthType || credential.type,
+      runtime: normalizedRuntime,
+      purpose,
+      ephemeralCredential,
+    };
+  } finally {
+    if (secret) {
+      clearSecretMaterial(secret);
+    }
+    if (material) {
+      clearSecretMaterial(material);
+    }
+  }
 }
 
 module.exports = {

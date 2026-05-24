@@ -166,11 +166,12 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
     setError('');
     try {
       if (window.ipcRenderer) {
-        await window.ipcRenderer.invoke('identity-test', { userId, credentialId: id, host, username, port, authType: identity.type });
+        const result = await window.ipcRenderer.invoke('identity-test', { userId, credentialId: id, host, username, port, authType: identity.type });
+        alert(`Identity test succeeded. ${result?.fingerprint ? `Fingerprint: ${result.fingerprint}` : ''}`.trim());
       } else {
-        await api.testIdentity(id, { host, username, port, runtime, authType: identity.type });
+        const result = await api.testIdentity(id, { host, username, port, runtime, authType: identity.type });
+        alert(`Identity test succeeded. ${result.fingerprint ? `Fingerprint: ${result.fingerprint}` : ''}`.trim());
       }
-      alert('Identity test succeeded.');
     } catch (err: any) {
       setError(err.message || 'Identity test failed');
     }

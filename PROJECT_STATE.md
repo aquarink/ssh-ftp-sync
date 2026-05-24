@@ -165,6 +165,73 @@ Research basis:
 - Enabling Secure Shell Access with OpenID Connect
 - Towards SSH3: how HTTP/3 improves secure shells
 
+## Phase 1.3 — Key Isolation
+
+What was built:
+
+- Ephemeral credential wrappers for browser/server and Electron runtime secret material.
+- Best-effort `clearSecretMaterial()` helpers with nested object cleanup and Buffer overwrite support.
+- Resolve-then-connect lifecycle so decrypted secret material is only present for the shortest possible lexical scope.
+- Browser SSH relay, Electron SSH IPC, identity test, and SFTP paths now clear credential material after use instead of storing it in session state.
+- Metadata-only session tracking so long-lived session objects keep host, user, runtime, purpose, and timestamps only.
+
+Main files changed:
+
+- `server/secretLifecycle.js`
+- `server/ephemeralCredential.js`
+- `server/identityResolver.js`
+- `server/sshWebSocket.js`
+- `server/sftpService.js`
+- `server/index.js`
+- `server/credentialStore.js`
+- `electron/secretLifecycle.js`
+- `electron/ephemeralCredential.js`
+- `electron/identityResolver.js`
+- `electron/terminalSessionManager.js`
+- `electron/sshHandler.js`
+- `electron/credentialVault.js`
+- `src/components/TerminalView.tsx`
+- `src/components/KeychainPanel.tsx`
+- `src/lib/api.ts`
+- `README.md`
+- `PROJECT_NOTE.md`
+
+Credential lifecycle model:
+
+- Resolve selected identity metadata through Smart Identity Engine.
+- Wrap resolved secret material in an ephemeral credential object with TTL metadata.
+- Build `ssh2` connect config in lexical scope only.
+- Call `connect()`, test, or SFTP operation.
+- Clear secret material in `finally` or on failure/expiry.
+
+Browser/Electron isolation model:
+
+- Browser runtime resolves credentials server-side and never stores raw secret material in WebSocket session state.
+- Electron runtime resolves credentials in the main process and stores only session metadata in the terminal session map.
+- Renderer code receives status and metadata only.
+- Reconnect and SFTP flows resolve credentials again instead of reusing cached secret material.
+
+Limitations:
+
+- JavaScript strings cannot be reliably memory-wiped.
+- Buffer overwrite and nested cleanup are best-effort only.
+- Live SSH/SFTP verification against a real target is still required if this environment does not have a configured host.
+
+Next work:
+
+- Phase 1.4 Session Cleanup
+- Phase 1.5 Zero-Trust Access Layer
+- stronger process isolation
+- native secure memory exploration
+
+Research basis:
+
+- SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+- On the Security of SSH Client Signatures
+- Practical Privacy-Preserving Authentication for SSH
+- Enabling Secure Shell Access with OpenID Connect
+- Towards SSH3: how HTTP/3 improves secure shells
+
 ## Current Architecture
 
 - React, TypeScript, Vite, TailwindCSS, and Electron provide the UI shell.

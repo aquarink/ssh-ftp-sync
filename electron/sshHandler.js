@@ -4,6 +4,7 @@ const { runSftpOperation } = require('../server/sftpService');
 const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
 const { TerminalSessionManager } = require('./terminalSessionManager');
 const { resolveIdentity } = require('./identityResolver');
+const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
 const { electronVaultHealthCheck } = require('./vaultHealth');
 const { logIdentityEvent, logVaultEvent } = require('./securityLog');
 
@@ -22,13 +23,49 @@ function resolveDesktopUserId(rendererUserId) {
   return effectiveUserId;
 }
 
-function testSshConnection(config) {
+function buildConnectConfig(config, material) {
+  return {
+    host: config.host,
+    port: config.port || 22,
+    username: config.username,
+    password: material?.password || undefined,
+    privateKey: material?.privateKey || undefined,
+    passphrase: material?.passphrase || undefined,
+    cert: material?.certificate || material?.cert || undefined,
+    agent: material?.agent || undefined,
+    readyTimeout: 15000,
+  };
+}
+
+function testSshConnection(config, resolved) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const timer = setTimeout(() => {
       conn.end();
-      reject(new Error('SSH connection timed out'));
+      reject(Object.assign(new Error('Connection failed after credential resolution'), { status: 400 }));
     }, 15000);
+    if (!resolved.ephemeralCredential) {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('Credential secret unavailable'), { status: 400 }));
+      return;
+    }
+    if (isEphemeralCredentialExpired(resolved.ephemeralCredential)) {
+      clearTimeout(timer);
+      resolved.ephemeralCredential.clear();
+      logIdentityEvent('credentialExpired', {
+        userId: resolved.userId,
+        hostId: resolved.hostId || null,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: resolved.ephemeralCredential.sessionId || 'test',
+        runtime: resolved.runtime,
+        purpose: resolved.purpose,
+        authType: resolved.authType,
+        result: 'error',
+        timestamp: new Date().toISOString(),
+      });
+      reject(Object.assign(new Error('Credential secret unavailable'), { status: 400 }));
+      return;
+    }
     conn.once('ready', () => {
       clearTimeout(timer);
       conn.end();
@@ -36,19 +73,24 @@ function testSshConnection(config) {
     });
     conn.once('error', (error) => {
       clearTimeout(timer);
-      reject(new Error(error.message || 'SSH connection failed'));
+      reject(Object.assign(new Error('Connection failed after credential resolution'), { status: 400 }));
     });
-    conn.connect({
-      host: config.host,
-      port: config.port || 22,
-      username: config.username,
-      password: config.password || undefined,
-      privateKey: config.privateKey || undefined,
-      passphrase: config.passphrase || undefined,
-      cert: config.cert || undefined,
-      agent: config.agent || undefined,
-      readyTimeout: 15000,
-    });
+    try {
+      conn.connect(buildConnectConfig(config, resolved.ephemeralCredential.material));
+    } finally {
+      const cleared = resolved.ephemeralCredential.clear();
+      logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
+        userId: resolved.userId,
+        hostId: resolved.hostId || null,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId: resolved.ephemeralCredential.sessionId,
+        runtime: resolved.runtime,
+        purpose: resolved.purpose,
+        authType: resolved.authType,
+        result: cleared ? 'ok' : 'error',
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 }
 
@@ -64,16 +106,19 @@ ipcMain.on('ssh-connect', (event, payload) => {
       authType,
       credentialId,
       purpose: purpose || 'ssh',
+      sessionId: id,
     });
 
-    logIdentityEvent('connect', {
+    logIdentityEvent('credentialUsedForPurpose', {
       userId: resolved.userId,
       hostId,
-      credentialId,
-      authType,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || credentialId,
+      sessionId: id,
+      authType: resolved.authType,
       runtime: 'electron',
       purpose: purpose || 'ssh',
       result: 'ok',
+      timestamp: new Date().toISOString(),
     });
 
     terminalSessions.connect(id, {
@@ -83,10 +128,11 @@ ipcMain.on('ssh-connect', (event, payload) => {
       host: payload.host,
       port: payload.port,
       username: payload.username,
-      authType,
-      credentialId,
-      ...resolved.connection,
-    }, {
+      authType: resolved.authType,
+      credentialId: resolved.credential?.id || credentialId,
+      runtime: 'electron',
+      purpose: purpose || 'ssh',
+    }, resolved.ephemeralCredential, {
       onConnected: (sessionId) => event.reply('ssh-connected', { id: sessionId }),
       onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
       onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
@@ -146,23 +192,45 @@ ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, cred
     authType,
     credentialId,
     purpose: 'test_connection',
+    sessionId: `test-${credentialId || hostId || 'identity'}`,
   });
-  await testSshConnection({
-    host,
-    port,
-    username,
-    ...resolved.connection,
-  });
-  logIdentityEvent('test', {
-    userId: resolved.userId,
-    hostId,
-    credentialId,
-    authType,
-    runtime: 'electron',
-    purpose: 'test_connection',
-    result: 'ok',
-  });
-  return { ok: true };
+  try {
+    await testSshConnection({
+      host,
+      port,
+      username,
+    }, resolved);
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: resolved.userId,
+      hostId,
+      credentialId: resolved.credential?.id || credentialId,
+      sessionId: resolved.ephemeralCredential?.sessionId || `test-${credentialId || hostId || 'identity'}`,
+      authType: resolved.authType,
+      runtime: 'electron',
+      purpose: 'test_connection',
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
+    return {
+      ok: true,
+      authType: resolved.authType,
+      fingerprint: resolved.credential?.fingerprint || resolved.credential?.publicKeyFingerprint || resolved.credential?.certificateFingerprint || null,
+      message: 'Credential material cleared after use',
+    };
+  } catch (error) {
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: resolved.userId,
+      hostId,
+      credentialId: resolved.credential?.id || credentialId,
+      sessionId: resolved.ephemeralCredential?.sessionId || `test-${credentialId || hostId || 'identity'}`,
+      authType: resolved.authType,
+      runtime: 'electron',
+      purpose: 'test_connection',
+      result: 'error',
+      timestamp: new Date().toISOString(),
+    });
+    throw Object.assign(new Error('Connection failed after credential resolution'), { status: error.status || 400 });
+  }
 });
 
 ipcMain.handle('vault-health', async () => {
@@ -189,9 +257,69 @@ ipcMain.on('ssh-disconnect', (event, { id }) => {
 });
 
 ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }) => {
-  const hostConfig = terminalSessions.getConfig(sessionId);
-  if (!hostConfig) {
+  const session = terminalSessions.getSessionMetadata(sessionId);
+  if (!session) {
     throw new Error('SFTP session is not available. Connect the SSH tab first.');
   }
-  return runSftpOperation(hostConfig, operation, payload || {});
+  const resolved = resolveIdentity({
+    userId: session.userId,
+    authenticatedUserId: activeUserId,
+    hostId: session.hostId,
+    hostUserId: session.userId,
+    runtime: 'electron',
+    authType: session.authType,
+    credentialId: session.credentialId,
+    purpose: 'sftp',
+    sessionId,
+  });
+
+  try {
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: resolved.userId,
+      hostId: session.hostId,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || session.credentialId,
+      sessionId,
+      runtime: 'electron',
+      purpose: 'sftp',
+      authType: resolved.authType,
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
+    return await runSftpOperation({
+      host: {
+        host: session.host,
+        port: session.port,
+        username: session.username,
+      },
+      credential: resolved.ephemeralCredential,
+    }, operation, payload || {});
+  } catch (error) {
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: resolved.userId,
+      hostId: session.hostId,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || session.credentialId,
+      sessionId,
+      runtime: 'electron',
+      purpose: 'sftp',
+      authType: resolved.authType,
+      result: 'error',
+      timestamp: new Date().toISOString(),
+    });
+    throw error;
+  } finally {
+    if (resolved.ephemeralCredential && !resolved.ephemeralCredential.cleared) {
+      const cleared = resolved.ephemeralCredential.clear();
+      logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
+        userId: resolved.userId,
+        hostId: session.hostId,
+        credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+        sessionId,
+        runtime: resolved.runtime,
+        purpose: 'sftp',
+        authType: resolved.authType,
+        result: cleared ? 'ok' : 'error',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
 });

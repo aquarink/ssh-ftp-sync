@@ -225,6 +225,21 @@ This project is still experimental and requires additional security audit before
 - Clear browser/Electron vault boundary.
 - Legacy password migration note for compatibility-only host records.
 
+### Key Isolation
+
+- Ephemeral credential wrappers with short TTL metadata.
+- Resolve-then-connect lifecycle for SSH, SFTP, and identity test flows.
+- No raw secret material in long-lived session state, reconnect state, or renderer state.
+- Best-effort secret cleanup with nested object deletion and Buffer overwrite.
+- Browser and Electron runtimes clear secret material after use in their own trust boundaries.
+- Reconnect and SFTP resolve fresh identity material instead of reusing cached secrets.
+- Research references by title only:
+  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+  - On the Security of SSH Client Signatures
+  - Practical Privacy-Preserving Authentication for SSH
+  - Enabling Secure Shell Access with OpenID Connect
+  - Towards SSH3: how HTTP/3 improves secure shells
+
 ### Research References
 
 - Practical Privacy-Preserving Authentication for SSH

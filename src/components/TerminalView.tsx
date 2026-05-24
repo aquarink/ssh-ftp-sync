@@ -12,7 +12,6 @@ interface TerminalViewProps {
     host: string;
     port: number;
     username: string;
-    password?: string;
     authType?: string;
     credentialId?: string | null;
   };

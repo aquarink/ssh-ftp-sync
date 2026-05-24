@@ -3,6 +3,7 @@ const path = require('path');
 const { createCipheriv, createDecipheriv, createHash, randomBytes } = require('crypto');
 const { utils: { parseKey } } = require('ssh2');
 const { logVaultEvent } = require('./securityLog');
+const { clearSecretMaterial } = require('./secretLifecycle');
 
 const vaultDir = process.env.CREDENTIAL_VAULT_DIR || path.join(__dirname, '..', '.credential-vault');
 
@@ -81,6 +82,8 @@ function saveCredentialSecret(credentialId, secret) {
   } catch (error) {
     if (error.status) throw error;
     throw Object.assign(new Error('Vault is not ready'), { status: 503 });
+  } finally {
+    clearSecretMaterial(secret);
   }
 }
 

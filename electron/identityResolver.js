@@ -1,4 +1,7 @@
 const { readCredentialSecret } = require('./credentialVault');
+const { clearSecretMaterial } = require('./secretLifecycle');
+const { createEphemeralCredential } = require('./ephemeralCredential');
+const { logIdentityEvent } = require('./securityLog');
 
 const supportedAuthTypes = new Set([
   'password',
@@ -79,6 +82,7 @@ function resolveIdentity({
   authType = null,
   credentialId = null,
   purpose = 'ssh',
+  sessionId = null,
 }) {
   const normalizedRuntime = normalizeRuntime(runtime);
   const normalizedAuthType = normalizeAuthType(authType);
@@ -101,17 +105,48 @@ function resolveIdentity({
     throw new Error('Host not found');
   }
 
-  const secret = readCredentialSecret(effectiveUserId, credentialId);
-  const connection = resolveSecretMaterial(secret, normalizedRuntime);
+  let secret = null;
+  let material = null;
+  try {
+    secret = readCredentialSecret(effectiveUserId, credentialId);
+    material = resolveSecretMaterial(secret, normalizedRuntime);
+    const ephemeralCredential = createEphemeralCredential({
+      sessionId,
+      hostId,
+      userId: effectiveUserId,
+      runtime: normalizedRuntime,
+      purpose,
+      authType: normalizedAuthType || secret.type || null,
+      material,
+    });
+    logIdentityEvent('credentialResolved', {
+      userId: effectiveUserId,
+      hostId,
+      credentialId: credentialId || ephemeralCredential.id,
+      sessionId: ephemeralCredential.sessionId,
+      authType: normalizedAuthType || secret.type || null,
+      runtime: normalizedRuntime,
+      purpose,
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
 
-  return {
-    hostId,
-    authType: normalizedAuthType,
-    runtime: normalizedRuntime,
-    purpose,
-    connection,
-    userId: effectiveUserId,
-  };
+    return {
+      hostId,
+      authType: normalizedAuthType || secret.type || null,
+      runtime: normalizedRuntime,
+      purpose,
+      userId: effectiveUserId,
+      ephemeralCredential,
+    };
+  } finally {
+    if (secret) {
+      clearSecretMaterial(secret);
+    }
+    if (material) {
+      clearSecretMaterial(material);
+    }
+  }
 }
 
 module.exports = { resolveIdentity };

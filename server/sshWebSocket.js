@@ -2,9 +2,12 @@ const { Client } = require('ssh2');
 const { WebSocket, WebSocketServer } = require('ws');
 const { getSessionUser } = require('./auth');
 const { resolveIdentity } = require('./identityResolver');
+const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
+const { logIdentityEvent } = require('./securityLog');
 
 const maxTerminalMessageBytes = 64 * 1024;
 const webSocketKeepaliveMs = 25000;
+const activeSessions = new Map();
 
 function send(ws, type, payload = {}) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -39,11 +42,9 @@ async function getUserHost(req, url) {
     authType,
     credentialId,
     purpose,
+    sessionId: url.searchParams.get('sessionId') || null,
   });
-  return {
-    ...resolved.host,
-    ...resolved.connection,
-  };
+  return resolved;
 }
 
 function readMessage(raw) {
@@ -56,10 +57,47 @@ function readMessage(raw) {
   return message;
 }
 
-function connectShell(ws, host) {
+function buildConnectConfig(host, material) {
+  return {
+    host: host.host,
+    port: host.port || 22,
+    username: host.username,
+    password: material?.password || undefined,
+    privateKey: material?.privateKey || undefined,
+    passphrase: material?.passphrase || undefined,
+    cert: material?.certificate || material?.cert || undefined,
+    agent: material?.agent || undefined,
+    readyTimeout: 15000,
+    keepaliveInterval: webSocketKeepaliveMs,
+    keepaliveCountMax: 3,
+  };
+}
+
+function connectShell(ws, resolved) {
+  if (!resolved.ephemeralCredential) {
+    throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+  }
+  if (isEphemeralCredentialExpired(resolved.ephemeralCredential)) {
+    resolved.ephemeralCredential.clear();
+    logIdentityEvent('credentialExpired', {
+      userId: resolved.userId,
+      hostId: resolved.host?.id || resolved.hostId || null,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+      sessionId: resolved.ephemeralCredential.sessionId,
+      runtime: resolved.runtime,
+      purpose: resolved.purpose,
+      authType: resolved.authType,
+      result: 'error',
+      timestamp: new Date().toISOString(),
+    });
+    throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+  }
+
   const conn = new Client();
   let stream = null;
   let finished = false;
+  const sessionId = resolved.ephemeralCredential?.sessionId || resolved.host?.id || resolved.hostId || `${Date.now()}`;
+  const sessionStartedAt = new Date().toISOString();
   const webSocketKeepalive = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.ping();
   }, webSocketKeepaliveMs);
@@ -70,7 +108,22 @@ function connectShell(ws, host) {
     clearInterval(webSocketKeepalive);
     stream?.end();
     conn.end();
+    activeSessions.delete(sessionId);
   };
+
+  activeSessions.set(sessionId, {
+    sessionId,
+    userId: resolved.userId,
+    hostId: resolved.host?.id || resolved.hostId || null,
+    runtime: resolved.runtime,
+    purpose: resolved.purpose,
+    authType: resolved.authType,
+    client: conn,
+    stream: null,
+    state: 'connecting',
+    createdAt: sessionStartedAt,
+    updatedAt: sessionStartedAt,
+  });
 
   ws.on('message', (raw) => {
     try {
@@ -94,6 +147,11 @@ function connectShell(ws, host) {
   ws.once('error', finish);
 
   conn.once('ready', () => {
+    const session = activeSessions.get(sessionId);
+    if (session) {
+      session.state = 'ready';
+      session.updatedAt = new Date().toISOString();
+    }
     conn.shell({ term: 'xterm-256color' }, (error, shell) => {
       if (error) {
         send(ws, 'error', { message: error.message });
@@ -103,6 +161,12 @@ function connectShell(ws, host) {
       }
 
       stream = shell;
+      const session = activeSessions.get(sessionId);
+      if (session) {
+        session.stream = shell;
+        session.state = 'active';
+        session.updatedAt = new Date().toISOString();
+      }
       send(ws, 'connected');
       stream.on('data', (data) => send(ws, 'data', { data: data.toString('utf8') }));
       stream.once('close', () => {
@@ -118,7 +182,18 @@ function connectShell(ws, host) {
     });
   });
   conn.once('error', (error) => {
-    send(ws, 'error', { message: error.message });
+    send(ws, 'error', { message: 'Connection failed after credential resolution' });
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: resolved.userId,
+      hostId: resolved.host?.id || resolved.hostId || null,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || null,
+      sessionId,
+      runtime: resolved.runtime,
+      purpose: resolved.purpose,
+      authType: resolved.authType,
+      result: 'error',
+      timestamp: new Date().toISOString(),
+    });
     ws.close();
     finish();
   });
@@ -128,19 +203,37 @@ function connectShell(ws, host) {
     finish();
   });
 
-  conn.connect({
-    host: host.host,
-    port: host.port || 22,
-    username: host.username,
-    password: host.password || undefined,
-    privateKey: host.privateKey || undefined,
-    passphrase: host.passphrase || undefined,
-    cert: host.certificate || undefined,
-    agent: host.agent || undefined,
-    readyTimeout: 15000,
-    keepaliveInterval: webSocketKeepaliveMs,
-    keepaliveCountMax: 3,
-  });
+  const connectConfig = buildConnectConfig(resolved.host, resolved.ephemeralCredential.material);
+  try {
+    logIdentityEvent('credentialUsedForPurpose', {
+      userId: resolved.userId,
+      hostId: resolved.host?.id || resolved.hostId || null,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+      sessionId,
+      runtime: resolved.runtime,
+      purpose: resolved.purpose,
+      authType: resolved.authType,
+      result: 'ok',
+      timestamp: new Date().toISOString(),
+    });
+    conn.connect(connectConfig);
+  } catch (error) {
+    activeSessions.delete(sessionId);
+    throw error;
+  } finally {
+    const cleared = resolved.ephemeralCredential.clear();
+    logIdentityEvent(cleared ? 'credentialCleared' : 'credentialClearFailed', {
+      userId: resolved.userId,
+      hostId: resolved.host?.id || resolved.hostId || null,
+      credentialId: resolved.credential?.id || resolved.ephemeralCredential.id,
+      sessionId,
+      runtime: resolved.runtime,
+      purpose: resolved.purpose,
+      authType: resolved.authType,
+      result: cleared ? 'ok' : 'error',
+      timestamp: new Date().toISOString(),
+    });
+  }
 }
 
 function attachSshWebSocket(server) {
@@ -154,9 +247,14 @@ function attachSshWebSocket(server) {
     }
 
     getUserHost(req, url)
-      .then((host) => {
+      .then((resolved) => {
         wss.handleUpgrade(req, socket, head, (ws) => {
-          connectShell(ws, host);
+          try {
+            connectShell(ws, resolved);
+          } catch (error) {
+            send(ws, 'error', { message: error.message });
+            ws.close();
+          }
         });
       })
       .catch((error) => rejectUpgrade(socket, error.status || 500, error.message || 'SSH unavailable'));
