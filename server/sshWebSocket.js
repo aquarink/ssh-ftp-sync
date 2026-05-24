@@ -43,7 +43,7 @@ async function getAuthorizedConnection(req, url) {
 
   const hostId = url.searchParams.get('hostId');
   if (!hostId) throw Object.assign(new Error('Host is required'), { status: 400 });
-  const connectToken = url.searchParams.get('connectToken');
+  const connectToken = url.searchParams.get('connectToken') || url.searchParams.get('token');
   const credentialId = url.searchParams.get('credentialId') || null;
   const authType = url.searchParams.get('authType') || null;
   const purpose = url.searchParams.get('purpose') || 'ssh';

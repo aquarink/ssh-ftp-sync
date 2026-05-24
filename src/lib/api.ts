@@ -46,17 +46,8 @@ export interface SessionMetrics {
 
 export interface ConnectTokenResponse {
   token: string;
-  tokenId: string;
   expiresAt: string;
-  scope: {
-    userId: string | null;
-    hostId: string | null;
-    identityId: string | null;
-    credentialId: string | null;
-    runtime: 'browser' | 'electron';
-    purpose: string;
-    authType: string | null;
-  };
+  ttlSeconds: number;
 }
 
 export interface ManagedUser extends User {

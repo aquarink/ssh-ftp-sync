@@ -25,6 +25,7 @@ const {
   invalidateConnectAuthorizationsByHost,
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
+  validateConnectTokenRequest,
 } = require('./accessPolicy');
 const { getSecurityMetrics } = require('./securityMetrics');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
@@ -919,11 +920,23 @@ async function route(req, res) {
     const sessionMetrics = getSessionMetrics();
     return json(res, 200, { ok: true, metrics: getSecurityMetrics(sessionMetrics) });
   }
-  if (req.method === 'POST' && url.pathname === '/api/security/connect-token') {
+  if (req.method === 'POST' && (url.pathname === '/api/security/connect-token' || url.pathname === '/api/security/connect-token/')) {
     const user = await requireUser(req, res);
     if (!user) return;
-    const token = await issueConnectAuthorization(user.id, await readJson(req));
-    return json(res, 201, token);
+    try {
+      const request = validateConnectTokenRequest(await readJson(req));
+      const token = await issueConnectAuthorization(user.id, request);
+      return json(res, 200, {
+        token: token.token,
+        expiresAt: token.expiresAt,
+        ttlSeconds: token.ttlSeconds,
+      });
+    } catch (error) {
+      if (error.status === 400 && error.message !== 'Invalid connect token request') {
+        throw Object.assign(new Error('Invalid connect token request'), { status: 400 });
+      }
+      throw error;
+    }
   }
   if (req.method === 'POST' && url.pathname === '/api/security/connect-token/consume') {
     const body = await readJson(req);
