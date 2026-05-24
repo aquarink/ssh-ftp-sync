@@ -53,6 +53,7 @@ The API and storage model may still change while the project evolves into a stab
 
 - Preview domain: `https://ant-tech-async.mobwn.my.id`
 - Nginx serves the Vite `dist` directory and proxies `/api/` to the Node API on `127.0.0.1:8790`.
+- Because the preview origin is HTTPS, the browser terminal relay uses `wss:` from `window.location.protocol`; `ws:` is only used in non-HTTPS local/dev contexts.
 - The API uses MySQL database values from the ignored `.env` file.
 - User passwords are hashed with Node `scrypt`.
 - Sessions are stored in MySQL and issued as HttpOnly cookies.
@@ -140,6 +141,66 @@ This project is being prepared for open source development.
 - Terminal memory and cleanup audits.
 - Automated tests for auth, host ownership, identity ownership, and SFTP path validation.
 
+## Research Scope
+
+This project is also being shaped as a research prototype for cloud-oriented SSH management.
+
+Working research focus:
+
+- SSH/SFTP/FTP access over cloud-hosted web and desktop clients.
+- Secure remote terminal orchestration in browser and Electron runtimes.
+- Stronger secret protection for host metadata and credentials.
+- Encryption of host data at rest, especially fields that are still effectively plaintext or easy to inspect.
+- Practical enhancements to SSH workflows rather than a full reinvention of SSH itself.
+
+Primary research questions:
+
+- How can SSH session management be made safer when the client is browser-based and cloud-hosted?
+- What architecture is appropriate for a cloud SSH client that supports both browser relay and native desktop use?
+- How should host metadata, credentials, and identity secrets be separated and encrypted to reduce leakage risk?
+- What design patterns improve usability without weakening SSH security guarantees?
+- Which parts of the cloud SSH stack can be improved through a novel client-side or application-layer security model?
+
+Working assumptions:
+
+- "SSH/SFTP/FTP on cloud" is treated here as a cloud-hosted management layer for remote access, not as a replacement for the SSH protocol itself.
+- The current product already covers a basic browser relay and desktop session model, but the research direction is about hardening, encryption, and better operational UX.
+- FTP support is still a planned/secondary area; the stronger novelty is likely in SSH session security, credential handling, and encrypted host data.
+
+Potential novelty angles:
+
+- End-to-end encryption for host metadata and credentials inside the application layer.
+- Safer browser relay lifecycle with strict session cleanup and access control.
+- Hybrid browser/Electron architecture with shared session semantics but different secret storage backends.
+- Optional SSH identity abstraction that avoids plaintext secrets in normal application state.
+- Host record encryption and metadata minimization as a first-class design decision.
+
+Possible evaluation dimensions:
+
+- Session cleanup reliability when tabs, browser windows, or desktop windows close unexpectedly.
+- Reduction of plaintext exposure in host records and identity materials.
+- Compatibility across browser, Electron, Linux, Windows, and macOS.
+- Performance impact of the WebSocket relay and terminal rendering.
+- Usability impact of encrypted secret storage and pin/hide workflow changes.
+
+Candidate Scopus search query ideas:
+
+- `("SSH" OR "secure shell") AND (cloud OR "cloud-based" OR browser OR web) AND (client OR terminal OR gateway)`
+- `("remote terminal" OR "web terminal") AND (security OR secure OR encryption) AND cloud`
+- `("SSH client" AND browser AND security) OR ("browser-based SSH" AND encryption)`
+- `("SFTP" OR "FTP") AND cloud AND (client OR management OR browser)`
+- `("credential encryption" OR "encrypted metadata") AND (host management OR remote access)`
+- `("secure remote access" AND "cloud" AND SSH)`
+- `("web-based SSH" AND "session management" AND security)`
+- `("terminal emulator" AND web AND secure AND remote access)`
+- `("privileged access" AND SSH AND browser) AND cloud`
+- `("end-to-end encryption" AND metadata AND remote access)`
+
+Suggested research angle framing:
+
+- The baseline problem is not SSH itself, but how a cloud-hosted application can safely orchestrate SSH sessions, preserve usability, and avoid plaintext host/credential exposure.
+- The main contribution can be positioned as an architecture and implementation study for secure cloud SSH management with encrypted host data and hybrid browser/desktop execution.
+
 ## Remaining Product Work
 
 1. Complete real user flow testing:
@@ -170,3 +231,4 @@ This project is being prepared for open source development.
    - issue templates
    - security policy
    - architecture documentation
+10. Convert research notes into a formal literature-review and methodology outline for the cloud SSH study.
