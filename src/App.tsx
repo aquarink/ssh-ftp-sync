@@ -72,6 +72,22 @@ function App() {
     const val = localStorage.getItem('ftpScrollPosition');
     return val ? parseInt(val, 10) || 0 : 0;
   });
+  const [ftpPaths, setFtpPaths] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem('ftpPaths');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      return Object.entries(parsed).reduce<Record<string, string>>((acc, [key, value]) => {
+        if (typeof value === 'string' && value.length > 0) {
+          acc[key] = value;
+        }
+        return acc;
+      }, {});
+    } catch {
+      return {};
+    }
+  });
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
     const val = localStorage.getItem('terminalFontSize');
     const parsed = val ? parseInt(val, 10) : DEFAULT_TERMINAL_FONT_SIZE;
@@ -141,6 +157,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('ftpScrollPosition', String(ftpScrollPosition));
   }, [ftpScrollPosition]);
+
+  useEffect(() => {
+    localStorage.setItem('ftpPaths', JSON.stringify(ftpPaths));
+  }, [ftpPaths]);
 
   useEffect(() => {
     localStorage.setItem('terminalFontSize', String(terminalFontSize));
@@ -1198,12 +1218,16 @@ function App() {
                   <SftpFileManager
                     sessionId={activeTab.id}
                     hostId={activeTab.hostId}
+                    authType={activeTab.host.authType || null}
+                    credentialId={activeTab.host.credentialId || null}
+                    initialPath={ftpPaths[activeTab.hostId] || '/'}
                     isVisible={rightPanelVisible}
                     isPinned={rightPanelPinned}
                     onTogglePin={() => setRightPanelPinned(p => !p)}
                     onToggleVisible={() => setRightPanelVisible(v => !v)}
                     scrollPosition={ftpScrollPosition}
                     onScrollPositionChange={setFtpScrollPosition}
+                    onCurrentPathChange={(path) => setFtpPaths(prev => ({ ...prev, [activeTab.hostId]: path }))}
                   />
                 </div>
               ) : (

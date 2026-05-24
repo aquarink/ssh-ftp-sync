@@ -323,6 +323,8 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
   }
   let authorization = null;
   let resolved = null;
+  const authType = payload?.authType ?? session.authType ?? null;
+  const credentialId = payload?.credentialId ?? session.credentialId ?? null;
 
   try {
     authorization = await consumeConnectToken({
@@ -330,8 +332,8 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
       hostId: session.hostId,
       runtime: 'electron',
       purpose: 'sftp',
-      authType: session.authType || null,
-      credentialId: session.credentialId || null,
+      authType,
+      credentialId,
       connectToken: payload?.connectToken,
     });
     resolved = resolveIdentity({
@@ -340,8 +342,8 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
       hostId: session.hostId,
       hostUserId: session.userId,
       runtime: 'electron',
-      authType: authorization.authType || session.authType,
-      credentialId: authorization.credentialId || session.credentialId,
+      authType: authorization.authType || authType,
+      credentialId: authorization.credentialId || credentialId,
       purpose: authorization.purpose || 'sftp',
       sessionId,
     });
@@ -363,16 +365,16 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
         username: session.username,
       },
       credential: resolved.ephemeralCredential,
-      sessionMeta: {
-        sessionId,
-        userId: session.userId,
-        hostId: session.hostId,
-        credentialId: authorization.credentialId || session.credentialId || resolved.credential?.id || null,
-        runtime: 'electron',
-        purpose: authorization.purpose || 'sftp',
-        sharedSession: true,
-      },
-    }, operation, payload || {});
+        sessionMeta: {
+          sessionId,
+          userId: session.userId,
+          hostId: session.hostId,
+          credentialId: authorization.credentialId || credentialId || resolved.credential?.id || null,
+          runtime: 'electron',
+          purpose: authorization.purpose || 'sftp',
+          sharedSession: true,
+        },
+      }, operation, payload || {});
   } catch (error) {
     logIdentityEvent('credentialUsedForPurpose', {
       userId: resolved?.userId || session.userId,

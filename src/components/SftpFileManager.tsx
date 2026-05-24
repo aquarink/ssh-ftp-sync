@@ -5,12 +5,16 @@ import { api, SftpEntry } from '../lib/api';
 interface SftpFileManagerProps {
   sessionId: string;
   hostId: string;
+  authType?: string | null;
+  credentialId?: string | null;
+  initialPath?: string;
   isVisible: boolean;
   isPinned: boolean;
   onTogglePin: () => void;
   onToggleVisible: () => void;
   scrollPosition: number;
   onScrollPositionChange: (value: number) => void;
+  onCurrentPathChange?: (value: string) => void;
 }
 
 type Progress = { label: string; value: number | null } | null;
@@ -61,14 +65,18 @@ function formatDate(mtimeSeconds: number) {
 export function SftpFileManager({
   sessionId,
   hostId,
+  authType = null,
+  credentialId = null,
+  initialPath = '/',
   isVisible,
   isPinned,
   onTogglePin,
   onToggleVisible,
   scrollPosition,
   onScrollPositionChange,
+  onCurrentPathChange,
 }: SftpFileManagerProps) {
-  const [currentPath, setCurrentPath] = useState('/');
+  const [currentPath, setCurrentPath] = useState(initialPath || '/');
   const [entries, setEntries] = useState<SftpEntry[]>([]);
   const [selected, setSelected] = useState<SftpEntry | null>(null);
   const [loading, setLoading] = useState(false);
@@ -100,8 +108,15 @@ export function SftpFileManager({
       hostId,
       runtime,
       purpose: 'sftp',
+      authType,
+      credentialId,
     });
-    const requestPayload = { ...payload, connectToken: token };
+    const requestPayload = {
+      ...payload,
+      authType,
+      credentialId,
+      connectToken: token,
+    };
     if (window.ipcRenderer) {
       return window.ipcRenderer.invoke<T>('sftp-operation', { sessionId, operation, payload: requestPayload });
     }
@@ -120,6 +135,7 @@ export function SftpFileManager({
       const nextEntries = Array.isArray(result) ? result : (result.entries || []);
       setEntries(nextEntries);
       setCurrentPath(path);
+      onCurrentPathChange?.(path);
       setSelected(null);
       requestAnimationFrame(() => {
         if (!mountedRef.current) return;
@@ -135,8 +151,9 @@ export function SftpFileManager({
   };
 
   useEffect(() => {
-    refresh('/');
-  }, [sessionId, hostId]);
+    setCurrentPath(initialPath || '/');
+    refresh(initialPath || '/');
+  }, [sessionId, hostId, initialPath]);
 
   useEffect(() => {
     if (scrollContainerRef.current) {
