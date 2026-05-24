@@ -38,6 +38,7 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
   const [hostAssignments, setHostAssignments] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [label, setLabel] = useState('');
   const [type, setType] = useState<SshIdentity['type']>('private_key');
   const [username, setUsername] = useState('');
@@ -140,6 +141,7 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
         await window.ipcRenderer.invoke('identity-save-secret', { userId, id: identity.id, secret });
       }
       resetForm();
+      setNotice('Secret saved securely. Secrets are not displayed after saving.');
       await loadIdentities();
     } catch (err: any) {
       setError(err.message || 'Unable to save identity');
@@ -198,6 +200,7 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
             SSH Keys / Identities
           </div>
           {error && <div className="p-3 bg-red-500/10 text-red-300 border border-red-500/20 rounded text-xs">{error}</div>}
+          {notice && <div className="p-3 bg-green-500/10 text-green-200 border border-green-500/20 rounded text-xs leading-5">{notice}</div>}
           <input value={label} onChange={e => setLabel(e.target.value)} required placeholder="Identity label" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none" />
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Default username, optional" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none" />
           <select value={type} onChange={e => setType(e.target.value as SshIdentity['type'])} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none">
@@ -235,6 +238,7 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
           <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes, optional" className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-sm text-white outline-none resize-none" />
           <button disabled={!isSaveable} className="w-full bg-primary text-background rounded-md py-2 text-sm font-semibold disabled:opacity-40">Save identity</button>
           <p className="text-xs text-textMuted leading-5">Only metadata is returned by the API. Secrets are resolved only during connection.</p>
+          <p className="text-xs text-textMuted leading-5">Secrets are stored in the secure vault and are not shown after saving.</p>
         </form>
 
         <div className="border border-border bg-surface rounded-lg overflow-hidden">
@@ -253,6 +257,8 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
                     <div className="text-sm text-white truncate">{identity.label}</div>
                     <div className="text-xs text-textMuted truncate">{identity.type} {identity.fingerprint || identity.certificateFingerprint || ''}</div>
                     <div className="text-[11px] text-textMuted mt-1">Assigned to {identity.assignedHostCount || 0} host{(identity.assignedHostCount || 0) === 1 ? '' : 's'}</div>
+                    <div className="text-[11px] text-textMuted">Created {identity.createdAt}</div>
+                    <div className="text-[11px] text-textMuted">Updated {identity.updatedAt}</div>
                   </div>
                   <button onClick={() => testIdentity(identity.id)} className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-textMuted hover:text-white">Test</button>
                   <button onClick={() => removeIdentity(identity.id)} className="p-2 rounded hover:bg-red-500/20 text-textMuted hover:text-red-300"><Trash2 size={15} /></button>

@@ -4,10 +4,23 @@ const { runSftpOperation } = require('../server/sftpService');
 const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
 const { TerminalSessionManager } = require('./terminalSessionManager');
 const { resolveIdentity } = require('./identityResolver');
+const { electronVaultHealthCheck } = require('./vaultHealth');
+const { logIdentityEvent, logVaultEvent } = require('./securityLog');
 
 const terminalSessions = new TerminalSessionManager();
 let activeUserId = null;
 // TODO(security): prefer authenticated app/session context over renderer-supplied userId whenever the desktop shell can derive it directly.
+
+function resolveDesktopUserId(rendererUserId) {
+  const effectiveUserId = activeUserId || rendererUserId;
+  if (!effectiveUserId) {
+    throw new Error('Authenticated user context is unavailable');
+  }
+  if (activeUserId && rendererUserId && activeUserId !== rendererUserId) {
+    throw new Error('Renderer user context does not match authenticated session context');
+  }
+  return effectiveUserId;
+}
 
 function testSshConnection(config) {
   return new Promise((resolve, reject) => {
@@ -53,10 +66,20 @@ ipcMain.on('ssh-connect', (event, payload) => {
       purpose: purpose || 'ssh',
     });
 
-    terminalSessions.connect(id, {
-      userId,
+    logIdentityEvent('connect', {
+      userId: resolved.userId,
       hostId,
-      hostUserId,
+      credentialId,
+      authType,
+      runtime: 'electron',
+      purpose: purpose || 'ssh',
+      result: 'ok',
+    });
+
+    terminalSessions.connect(id, {
+      userId: resolved.userId,
+      hostId,
+      hostUserId: resolved.userId,
       host: payload.host,
       port: payload.port,
       username: payload.username,
@@ -90,26 +113,26 @@ ipcMain.handle('session-context-clear', async () => {
 });
 
 ipcMain.handle('credential-save-secret', async (event, { userId, id, secret }) => {
-  if (!userId) throw new Error('User context is required to store a credential secret');
-  saveCredentialSecret(userId, id, secret);
+  const effectiveUserId = resolveDesktopUserId(userId);
+  saveCredentialSecret(effectiveUserId, id, secret);
   return { ok: true };
 });
 
 ipcMain.handle('identity-save-secret', async (event, { userId, id, secret }) => {
-  if (!userId) throw new Error('User context is required to store an identity secret');
-  saveCredentialSecret(userId, id, secret);
+  const effectiveUserId = resolveDesktopUserId(userId);
+  saveCredentialSecret(effectiveUserId, id, secret);
   return { ok: true };
 });
 
 ipcMain.handle('credential-remove-secret', async (event, { userId, id }) => {
-  if (!userId) throw new Error('User context is required to remove a credential secret');
-  removeCredentialSecret(userId, id);
+  const effectiveUserId = resolveDesktopUserId(userId);
+  removeCredentialSecret(effectiveUserId, id);
   return { ok: true };
 });
 
 ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
-  if (!userId) throw new Error('User context is required to remove an identity secret');
-  removeCredentialSecret(userId, id);
+  const effectiveUserId = resolveDesktopUserId(userId);
+  removeCredentialSecret(effectiveUserId, id);
   return { ok: true };
 });
 
@@ -130,7 +153,27 @@ ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, cred
     username,
     ...resolved.connection,
   });
+  logIdentityEvent('test', {
+    userId: resolved.userId,
+    hostId,
+    credentialId,
+    authType,
+    runtime: 'electron',
+    purpose: 'test_connection',
+    result: 'ok',
+  });
   return { ok: true };
+});
+
+ipcMain.handle('vault-health', async () => {
+  const result = electronVaultHealthCheck();
+  logVaultEvent('health', {
+    result: result.ok ? 'ok' : 'warn',
+    storageReady: result.storageReady,
+    encryptionReady: result.encryptionReady,
+    testEncryptDecryptOk: result.testEncryptDecryptOk,
+  });
+  return result;
 });
 
 ipcMain.on('ssh-input', (event, { id, data }) => {

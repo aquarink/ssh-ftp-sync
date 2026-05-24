@@ -216,11 +216,22 @@ This project is still experimental and requires additional security audit before
 - Browser and Electron runtime-specific policy enforcement.
 - Secret resolution only during connection setup.
 
+### Secure Vault
+
+- Metadata-only identity API responses.
+- Encrypted secret storage for browser/server and Electron runtimes.
+- Redacted logs and safe vault error handling.
+- Vault health check for admin/internal verification.
+- Clear browser/Electron vault boundary.
+- Legacy password migration note for compatibility-only host records.
+
 ### Research References
 
 - Practical Privacy-Preserving Authentication for SSH
 - On the Security of SSH Client Signatures
 - Enabling Secure Shell Access with OpenID Connect
+- SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+- Towards SSH3: how HTTP/3 improves secure shells
 
 ### Experimental Features
 

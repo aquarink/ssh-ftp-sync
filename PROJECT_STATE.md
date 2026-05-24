@@ -88,6 +88,83 @@ Research basis:
 - On the Security of SSH Client Signatures
 - Enabling Secure Shell Access with OpenID Connect
 
+## Phase 1.2 — Secure Vault
+
+What was built:
+
+- A hardened secure vault layer for browser/server and Electron credential storage.
+- Metadata-only identity responses with secret fields excluded from API payloads.
+- Recursive redaction helpers for logs and error payloads.
+- A server vault health check endpoint for admin-only verification.
+- Electron vault health logic for local secure-storage validation.
+- Frontend secret cleanup and success messaging after save.
+- Documentation for the legacy password-host migration path.
+
+Main files changed:
+
+- `server/secretRedaction.js`
+- `server/securityLog.js`
+- `server/vaultHealth.js`
+- `server/credentialStore.js`
+- `server/index.js`
+- `server/identityResolver.js`
+- `electron/secretRedaction.js`
+- `electron/securityLog.js`
+- `electron/vaultHealth.js`
+- `electron/credentialVault.js`
+- `electron/sshHandler.js`
+- `src/components/KeychainPanel.tsx`
+- `src/lib/api.ts`
+- `PROJECT_NOTE.md`
+- `README.md`
+
+Vault model:
+
+- Browser/server vault:
+  - secrets are encrypted at rest in `.credential-vault/`
+  - encryption requires `CREDENTIAL_VAULT_KEY` or `SESSION_SECRET`
+  - vault health checks validate storage readiness and crypto roundtrip
+- Electron vault:
+  - secrets are encrypted via `safeStorage` in `app.getPath('userData')`
+  - user-scoped vault keys prevent cross-user reuse inside the same desktop app
+  - vault health checks validate local secure-storage readiness and crypto roundtrip
+
+Security decision:
+
+- No plaintext secret fallback.
+- Secret material is removed from API responses.
+- Logs are redacted before emission.
+- Vault health responses expose only status metadata.
+- Browser and Electron vault boundaries remain separate.
+- Legacy host password storage remains compatibility-only.
+
+Limitation:
+
+- Legacy password-host rows still exist and may be used by old records until migration/backfill is completed.
+- Electron renderer trust boundary still needs future hardening beyond the current session-context sync.
+- One-time/transient credential flow is still pending.
+
+Pending work:
+
+- Legacy password migration/backfill.
+- Vault rotation and export/import hardening.
+- Admin-only audit view for vault health and identity inventory.
+- Phase 1.3 Key Isolation.
+
+Relationship with Smart Identity Engine:
+
+- Smart Identity Engine decides which identity may be used.
+- Secure Vault decides how the selected secret is stored, redacted, and health-checked.
+- Together they reduce both selection exposure and secret exposure.
+
+Research basis:
+
+- SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+- On the Security of SSH Client Signatures
+- Practical Privacy-Preserving Authentication for SSH
+- Enabling Secure Shell Access with OpenID Connect
+- Towards SSH3: how HTTP/3 improves secure shells
+
 ## Current Architecture
 
 - React, TypeScript, Vite, TailwindCSS, and Electron provide the UI shell.
@@ -104,6 +181,7 @@ Research basis:
 - SSH identity secrets are separated from host metadata:
   - Browser/server mode uses encrypted vault files through `server/credentialStore.js`.
   - Electron desktop uses `safeStorage` through `electron/credentialVault.js`.
+  - Metadata-only API responses and redacted logs are enforced through the secure vault layer.
 
 ## Deployment State
 

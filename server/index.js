@@ -16,6 +16,8 @@ const { validateTurnstile } = require('./turnstile');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
 const { resolveIdentity } = require('./identityResolver');
+const { vaultHealthCheck } = require('./vaultHealth');
+const { logIdentityEvent, redactSecretFields } = require('./securityLog');
 const {
   removeCredentialSecret,
   saveCredentialSecret,
@@ -83,6 +85,9 @@ function hostPayload(body) {
   if (port < 1 || port > 65535) {
     throw Object.assign(new Error('Port must be between 1 and 65535'), { status: 400 });
   }
+  if (authType === 'one_time') {
+    throw Object.assign(new Error('Authentication method is not supported yet'), { status: 400 });
+  }
   if (authType !== 'password' && authType !== 'one_time' && !credentialId) {
     throw Object.assign(new Error('Credential is required for the selected authentication method'), { status: 400 });
   }
@@ -97,6 +102,23 @@ function publicUser(user) {
     username: user.username,
     role: user.role,
     approvalStatus: user.approval_status,
+  };
+}
+
+function publicHost(row) {
+  return {
+    id: row.id,
+    userId: row.userId,
+    name: row.name,
+    host: row.host,
+    port: row.port,
+    username: row.username,
+    authType: row.authType,
+    credentialId: row.credentialId,
+    startupDirectory: row.startupDirectory,
+    notes: row.notes,
+    tags: row.tags,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -261,7 +283,7 @@ async function listHosts(req, res) {
       ORDER BY created_at ASC`,
     [user.id]
   );
-  json(res, 200, { hosts });
+  json(res, 200, { hosts: hosts.map(publicHost) });
 }
 
 async function ensureUserCredential(userId, credentialId) {
@@ -291,7 +313,14 @@ async function createHost(req, res) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [host.id, user.id, host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags, host.password]
   );
-  json(res, 201, { host });
+  json(res, 201, { host: publicHost({
+    ...host,
+    userId: user.id,
+    updatedAt: null,
+    startupDirectory: host.startupDirectory,
+    credentialId: host.credentialId,
+    authType: host.authType,
+  }) });
 }
 
 async function updateHost(req, res, id) {
@@ -339,7 +368,7 @@ async function updateHost(req, res, id) {
       LIMIT 1`,
     [id, user.id]
   );
-  json(res, 200, { host: rows[0] });
+  json(res, 200, { host: publicHost(rows[0]) });
 }
 
 function publicCredential(row) {
@@ -353,6 +382,7 @@ function publicCredential(row) {
     certificateFingerprint: row.certificate_fingerprint,
     notes: row.notes,
     assignedHostCount: Number(row.assigned_host_count || 0),
+    lastUsedAt: row.last_used_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -363,6 +393,7 @@ async function listIdentities(req, res) {
   if (!user) return;
   const [rows] = await pool.execute(
     `SELECT c.id, c.type, c.label, c.username, c.fingerprint, c.public_key_fingerprint, c.certificate_fingerprint, c.notes, c.created_at, c.updated_at,
+            NULL AS last_used_at,
             (
               SELECT COUNT(*)
                 FROM hosts h
@@ -446,6 +477,7 @@ async function createIdentity(req, res) {
   );
   const [rows] = await pool.execute(
     `SELECT id, type, label, username, fingerprint, public_key_fingerprint, certificate_fingerprint, notes, created_at, updated_at,
+            NULL AS last_used_at,
             0 AS assigned_host_count
        FROM ssh_credentials
       WHERE id = ? AND user_id = ?
@@ -453,6 +485,14 @@ async function createIdentity(req, res) {
     [id, user.id]
   );
   const publicIdentity = publicCredential(rows[0]);
+  logIdentityEvent('create', {
+    userId: user.id,
+    credentialId: publicIdentity.id,
+    authType: publicIdentity.type,
+    runtime: identity.runtime,
+    purpose: 'save',
+    result: 'ok',
+  });
   json(res, 201, { identity: publicIdentity, credential: publicIdentity });
 }
 
@@ -461,6 +501,7 @@ async function getIdentity(req, res, id) {
   if (!user) return;
   const [rows] = await pool.execute(
     `SELECT c.id, c.type, c.label, c.username, c.fingerprint, c.public_key_fingerprint, c.certificate_fingerprint, c.notes, c.created_at, c.updated_at,
+            NULL AS last_used_at,
             (
               SELECT COUNT(*)
                 FROM hosts h
@@ -490,6 +531,11 @@ async function updateIdentity(req, res, id) {
       WHERE id = ? AND user_id = ?`,
     [label, username, notes, id, user.id]
   );
+  logIdentityEvent('update', {
+    userId: user.id,
+    credentialId: id,
+    result: 'ok',
+  });
   return getIdentity(req, res, id);
 }
 
@@ -503,6 +549,11 @@ async function deleteIdentity(req, res, id) {
   if (!rows[0]) throw Object.assign(new Error('Identity not found'), { status: 404 });
   removeCredentialSecret(rows[0].storage_ref);
   await pool.execute('DELETE FROM ssh_credentials WHERE id = ? AND user_id = ?', [id, user.id]);
+  logIdentityEvent('delete', {
+    userId: user.id,
+    credentialId: id,
+    result: 'ok',
+  });
   json(res, 200, { ok: true });
 }
 
@@ -524,6 +575,13 @@ async function assignIdentityToHost(req, res, hostId) {
     'UPDATE hosts SET auth_type = ?, credential_id = ?, password = \'\' WHERE id = ? AND user_id = ?',
     [authType, identityId, hostId, user.id]
   );
+  logIdentityEvent('assign', {
+    userId: user.id,
+    hostId,
+    credentialId: identityId,
+    authType,
+    result: 'ok',
+  });
   const [updated] = await pool.execute(
     `SELECT id, user_id AS userId, name, host, port, username, auth_type AS authType, credential_id AS credentialId,
             startup_directory AS startupDirectory, notes, tags, updated_at AS updatedAt
@@ -532,7 +590,7 @@ async function assignIdentityToHost(req, res, hostId) {
       LIMIT 1`,
     [hostId, user.id]
   );
-  json(res, 200, { host: updated[0] });
+  json(res, 200, { host: publicHost(updated[0]) });
 }
 
 function testSshConnection(config) {
@@ -582,6 +640,17 @@ async function testIdentity(req, res, id) {
     purpose: 'test_connection',
   });
   await testSshConnection({ host, username, port, ...resolved.connection });
+  logIdentityEvent('test', {
+    userId: user.id,
+    credentialId: id,
+    host,
+    port,
+    username,
+    authType: body.authType || null,
+    runtime: resolved.runtime,
+    purpose: 'test_connection',
+    result: 'ok',
+  });
   json(res, 200, { ok: true });
 }
 
@@ -643,6 +712,11 @@ async function route(req, res) {
   if (req.method === 'GET' && (url.pathname === '/api/credentials' || url.pathname === '/api/identities')) return listIdentities(req, res);
   if (req.method === 'POST' && (url.pathname === '/api/credentials' || url.pathname === '/api/identities')) return createIdentity(req, res);
   if (req.method === 'GET' && url.pathname === '/api/admin/users') return listUsers(req, res);
+  if (req.method === 'GET' && url.pathname === '/api/security/vault-health') {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    return json(res, 200, vaultHealthCheck());
+  }
 
   const hostId = url.pathname.match(/^\/api\/hosts\/([^/]+)$/);
   if (req.method === 'PUT' && hostId) {
@@ -680,11 +754,11 @@ async function route(req, res) {
 const server = http.createServer((req, res) => {
   route(req, res).catch((error) => {
     if (!error.status || error.status >= 500) {
-      console.error('api-error', {
+      console.error('api-error', redactSecretFields({
         status: error.status || 500,
         message: error.message,
         code: error.code || null,
-      });
+      }));
     }
     const payload = {
       error: error.status ? error.message : 'Internal server error',

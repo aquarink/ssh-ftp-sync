@@ -138,6 +138,9 @@ async function resolveIdentity({
   const host = await loadHost(userId, hostId);
   const normalizedAuthType = normalizeHostAuthType(authType || host?.auth_type || null);
   const selectedCredentialId = credentialId || host?.credential_id || null;
+  if (normalizedRuntime !== 'browser' && normalizedRuntime !== 'electron') {
+    throw Object.assign(new Error('Authentication method is not supported yet'), { status: 400 });
+  }
 
   if (host && host.credential_id && credentialId && host.credential_id !== credentialId) {
     throw Object.assign(new Error('Identity is not assigned to this host'), { status: 403 });

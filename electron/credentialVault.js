@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
+const { logVaultEvent } = require('./securityLog');
 
 function vaultPath() {
   return path.join(app.getPath('userData'), 'ssh-credential-vault.json');
@@ -23,30 +24,47 @@ function vaultKey(userId, credentialId) {
 }
 
 function saveCredentialSecret(userId, credentialId, secret) {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('OS secure storage is not available on this desktop session');
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('Vault is not ready');
+    }
+    const vault = readVault();
+    vault[vaultKey(userId, credentialId)] = safeStorage.encryptString(JSON.stringify(secret)).toString('base64');
+    writeVault(vault);
+    logVaultEvent('save', { userId, credentialId, result: 'ok' });
+  } catch {
+    throw new Error('Vault is not ready');
   }
-  const vault = readVault();
-  vault[vaultKey(userId, credentialId)] = safeStorage.encryptString(JSON.stringify(secret)).toString('base64');
-  writeVault(vault);
 }
 
 function readCredentialSecret(userId, credentialId) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Vault is not ready');
+  }
   const vault = readVault();
   const entry = vault[vaultKey(userId, credentialId)] || vault[credentialId];
-  if (!entry) throw new Error('Credential secret is unavailable');
+  if (!entry) {
+    throw new Error('Credential secret unavailable');
+  }
   try {
-    return JSON.parse(safeStorage.decryptString(Buffer.from(entry, 'base64')));
+    const secret = JSON.parse(safeStorage.decryptString(Buffer.from(entry, 'base64')));
+    logVaultEvent('read', { userId, credentialId, result: 'ok' });
+    return secret;
   } catch {
-    throw new Error('Credential secret is unavailable');
+    throw new Error('Failed to decrypt credential');
   }
 }
 
 function removeCredentialSecret(userId, credentialId) {
-  const vault = readVault();
-  delete vault[vaultKey(userId, credentialId)];
-  delete vault[credentialId];
-  writeVault(vault);
+  try {
+    const vault = readVault();
+    delete vault[vaultKey(userId, credentialId)];
+    delete vault[credentialId];
+    writeVault(vault);
+    logVaultEvent('remove', { userId, credentialId, result: 'ok' });
+  } catch {
+    throw new Error('Vault is not ready');
+  }
 }
 
 module.exports = { readCredentialSecret, removeCredentialSecret, saveCredentialSecret };

@@ -54,6 +54,7 @@ export interface SshCredential {
   certificateFingerprint?: string | null;
   notes?: string | null;
   assignedHostCount?: number;
+  lastUsedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -195,6 +196,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  vaultHealth: () =>
+    request<{
+      ok: boolean;
+      storageReady: boolean;
+      encryptionReady: boolean;
+      testEncryptDecryptOk: boolean;
+      warning: string[];
+      checkedAt: string;
+    }>('/api/security/vault-health'),
   sftpOperation: <T = any>(hostId: string, operation: string, payload: Record<string, any>) =>
     request<T>(`/api/hosts/${encodeURIComponent(hostId)}/sftp/${encodeURIComponent(operation)}`, {
       method: 'POST',

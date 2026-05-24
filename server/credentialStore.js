@@ -2,18 +2,39 @@ const fs = require('fs');
 const path = require('path');
 const { createCipheriv, createDecipheriv, createHash, randomBytes } = require('crypto');
 const { utils: { parseKey } } = require('ssh2');
+const { logVaultEvent } = require('./securityLog');
 
 const vaultDir = process.env.CREDENTIAL_VAULT_DIR || path.join(__dirname, '..', '.credential-vault');
-const defaultVaultKey = 'development-credential-vault-key-change-me';
 
-function vaultKey() {
+function getVaultKeySource() {
+  const source = process.env.CREDENTIAL_VAULT_KEY || process.env.SESSION_SECRET;
+  if (!source) {
+    throw Object.assign(new Error('Vault is not ready'), { status: 503 });
+  }
+  return source;
+}
+
+function getVaultKeyBuffer() {
   return createHash('sha256')
-    .update(process.env.CREDENTIAL_VAULT_KEY || process.env.SESSION_SECRET || defaultVaultKey)
+    .update(getVaultKeySource())
     .digest();
+}
+
+function isVaultReady() {
+  try {
+    getVaultKeySource();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function ensureVaultDir() {
   fs.mkdirSync(vaultDir, { recursive: true, mode: 0o700 });
+}
+
+function getVaultDir() {
+  return vaultDir;
 }
 
 function storagePath(storageRef) {
@@ -23,8 +44,9 @@ function storagePath(storageRef) {
 }
 
 function encryptSecret(secret) {
+  const key = getVaultKeyBuffer();
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', vaultKey(), iv);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(secret), 'utf8'), cipher.final()]);
   return {
     iv: iv.toString('base64'),
@@ -34,34 +56,60 @@ function encryptSecret(secret) {
 }
 
 function decryptSecret(payload) {
-  const decipher = createDecipheriv('aes-256-gcm', vaultKey(), Buffer.from(payload.iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));
-  return JSON.parse(Buffer.concat([
-    decipher.update(Buffer.from(payload.data, 'base64')),
-    decipher.final(),
-  ]).toString('utf8'));
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', getVaultKeyBuffer(), Buffer.from(payload.iv, 'base64'));
+    decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));
+    return JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(payload.data, 'base64')),
+      decipher.final(),
+    ]).toString('utf8'));
+  } catch {
+    throw Object.assign(new Error('Failed to decrypt credential'), { status: 400 });
+  }
 }
 
 function saveCredentialSecret(credentialId, secret) {
-  ensureVaultDir();
-  const storageRef = `${credentialId}.json`;
-  fs.writeFileSync(storagePath(storageRef), JSON.stringify(encryptSecret(secret)), { mode: 0o600 });
-  return storageRef;
+  try {
+    if (!isVaultReady()) {
+      throw Object.assign(new Error('Vault is not ready'), { status: 503 });
+    }
+    ensureVaultDir();
+    const storageRef = `${credentialId}.json`;
+    fs.writeFileSync(storagePath(storageRef), JSON.stringify(encryptSecret(secret)), { mode: 0o600 });
+    logVaultEvent('save', { credentialId, result: 'ok' });
+    return storageRef;
+  } catch (error) {
+    if (error.status) throw error;
+    throw Object.assign(new Error('Vault is not ready'), { status: 503 });
+  }
 }
 
 function readCredentialSecret(storageRef) {
+  if (!isVaultReady()) {
+    throw Object.assign(new Error('Vault is not ready'), { status: 503 });
+  }
   try {
-    return decryptSecret(JSON.parse(fs.readFileSync(storagePath(storageRef), 'utf8')));
-  } catch {
-    throw Object.assign(new Error('Credential secret is unavailable'), { status: 400 });
+    const payload = JSON.parse(fs.readFileSync(storagePath(storageRef), 'utf8'));
+    const secret = decryptSecret(payload);
+    logVaultEvent('read', { storageRef, result: 'ok' });
+    return secret;
+  } catch (error) {
+    if (error.status) throw error;
+    if (error.code === 'ENOENT') {
+      throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
+    }
+    throw Object.assign(new Error('Failed to decrypt credential'), { status: 400 });
   }
 }
 
 function removeCredentialSecret(storageRef) {
   try {
     fs.unlinkSync(storagePath(storageRef));
+    logVaultEvent('remove', { storageRef, result: 'ok' });
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (error.code !== 'ENOENT') {
+      throw Object.assign(new Error('Vault is not ready'), { status: 503 });
+    }
   }
 }
 
@@ -106,8 +154,14 @@ function validateCertificate(certificate) {
 
 module.exports = {
   readCredentialSecret,
+  decryptSecret,
+  encryptSecret,
+  ensureVaultDir,
+  getVaultDir,
+  getVaultKeyBuffer,
   removeCredentialSecret,
   saveCredentialSecret,
+  isVaultReady,
   validateCertificate,
   validatePrivateKey,
   validatePublicKey,

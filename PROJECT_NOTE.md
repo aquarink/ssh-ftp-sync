@@ -29,3 +29,35 @@
 ## Legacy Password Migration Note
 
 - Existing host password rows are migration-only compatibility data. The long-term direction is to backfill them into scoped identities or transient connection credentials, then retire the legacy host password path.
+
+## [2026-05-24] - Phase 1.2 - Secure Vault
+
+- Objective: harden browser/server and Electron credential storage so secret material stays encrypted at rest, redacted in logs, and absent from API responses.
+- Implementation summary: added recursive redaction helpers, server and Electron vault health checks, metadata-only identity/host responses, safe vault error handling, Electron session-context sync, and frontend secret cleanup after save.
+- Architectural decision: keep Smart Identity Engine responsible for selection/scoping while Secure Vault owns secret material storage, health, and redaction.
+- Security decision: removed plaintext fallback for the server vault, blocked unsupported one-time flows, kept browser/server and Electron vaults separate, and ensured logs emit metadata only.
+- Research references:
+  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+  - On the Security of SSH Client Signatures
+  - Practical Privacy-Preserving Authentication for SSH
+  - Enabling Secure Shell Access with OpenID Connect
+  - Towards SSH3: how HTTP/3 improves secure shells
+- Files changed:
+  - `server/secretRedaction.js`
+  - `server/securityLog.js`
+  - `server/vaultHealth.js`
+  - `server/credentialStore.js`
+  - `server/index.js`
+  - `server/identityResolver.js`
+  - `electron/secretRedaction.js`
+  - `electron/securityLog.js`
+  - `electron/vaultHealth.js`
+  - `electron/credentialVault.js`
+  - `electron/sshHandler.js`
+  - `src/components/KeychainPanel.tsx`
+  - `src/lib/api.ts`
+  - `PROJECT_STATE.md`
+  - `README.md`
+- Acceptance test result: build/typecheck passed in this environment; live vault health verification and live SSH verification remain pending because the environment does not include a configured target and production vault key.
+- Known limitation: legacy password-host records still exist as compatibility debt, and the Electron renderer trust boundary should be hardened further in a future desktop-session integration pass.
+- Future recommendations: add encrypted backup/export, rotation, admin audit views, and Phase 1.3 key isolation.
