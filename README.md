@@ -27,17 +27,6 @@ The project is inspired by the operational workflows of tools such as Termius, M
 - Modern dark UI built with TailwindCSS and Lucide icons.
 - Experimental research features for plugins, AI-assisted terminal workflows, and team collaboration.
 
-## Screenshots
-
-Screenshots will be added as the open source UI stabilizes.
-
-| View | Preview |
-| --- | --- |
-| Landing page | _Coming soon_ |
-| SSH terminal | _Coming soon_ |
-| File manager | _Coming soon_ |
-| Keychain manager | _Coming soon_ |
-
 ## Tech Stack
 
 | Layer | Technology |
@@ -128,31 +117,6 @@ For production-style browser deployment:
 3. Proxy `/api/` and `/api/ssh` to the Node API.
 4. Run migrations before deploying backend changes.
 5. Use strong secrets and a secure vault key.
-
-## Environment Variables
-
-See `.env.example` for the current template. Common values include:
-
-```bash
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=3306
-MYSQL_DATABASE=ant_tech_async
-MYSQL_USER=ant_tech_async
-MYSQL_PASSWORD=change-me
-
-API_PORT=8790
-SESSION_DAYS=30
-SESSION_SECRET=change-me
-
-VITE_TURNSTILE_SITE_KEY=your-site-key
-TURNSTILE_SECRET_KEY=your-secret-key
-
-QUICKEMAILVERIFICATION_API_KEY=optional
-CREDENTIAL_VAULT_KEY=change-me
-CREDENTIAL_VAULT_DIR=.credential-vault
-```
-
-Never commit `.env`, vault files, private keys, passphrases, passwords, or production tokens.
 
 ## Development Workflow
 
@@ -337,25 +301,23 @@ Suggested contribution flow:
 
 ## Roadmap
 
-- [x] SSH terminal.
-- [x] Authentication system.
-- [x] Admin approval.
-- [x] Landing page.
-- [x] Host create/delete.
-- [x] Host edit/duplicate.
-- [x] Multiple tabs.
-- [x] SFTP manager.
-- [x] Keychain / SSH identities.
-- [ ] FTP support.
-- [ ] SSH certificates hardening.
-- [ ] Session persistence.
-- [ ] Host grouping and filters.
-- [ ] Remote monitoring.
-- [ ] Plugin system.
-- [ ] AI-assisted terminal workflows.
-- [ ] Team collaboration.
-- [ ] Security audit.
-- [ ] Stable open source release.
+This roadmap reflects the current baseline of the project.
+
+- Done: Phase 1 is already implemented above.
+- Next: Phase 2 research work.
+- Later: Phase 3 research work.
+
+### Phase 2
+
+- eBPF telemetry.
+- Session risk engine.
+- Behavioral detection.
+
+### Phase 3
+
+- SSH3/QUIC.
+- Browser-native relay.
+- Session mobility.
 
 ## License
 
