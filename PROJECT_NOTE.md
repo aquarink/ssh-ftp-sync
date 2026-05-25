@@ -22,14 +22,16 @@
 - [/] Verify no secret material appears in console output, API responses, localStorage, or plaintext DB fields. *(API responses verified via metadata-only tests; console/localStorage/DB requires live deployment audit)*
 - [x] Verify legacy password-host records migrate to scoped identities where still required. *(Covered by legacy password fallback tests!)*
 - [x] Implement and run automated unit tests for SFTP path validation, join, and mutable remote path checks. *(Covered by sftpPathValidation tests!)*
-- [ ] Set up an in-memory mock SSH/SFTP server on localhost for automated end-to-end integration testing.
-- [ ] Verify end-to-end connection flow, session cleanup lifecycle, and zero-trust token consumption against the local mock SSH server.
+- [x] Set up an in-memory mock SSH/SFTP server on localhost for automated end-to-end integration testing. *(Covered by sshIntegration tests!)*
+- [x] Verify end-to-end connection flow, session cleanup lifecycle, and zero-trust token consumption against the local mock SSH server. *(Covered by sshIntegration tests!)*
+
 
 
 > [!NOTE]
 > Added 23 new server-side unit tests in `server/__tests__/identityResolver.test.js` to cover security, scoped selection, legacy fallback, and error paths.
 > Added 11 new path validation unit tests in `server/__tests__/sftpPathValidation.test.js` to verify path normalization, null byte checking, path traversal blocking, join operation safety, and mutable root checks. Also fixed a bug in `server/sftpService.js` where the path traversal check was bypassable because path normalization occurred before checking for `..` segments.
-> Merged the documentation and tests from `phase1/01-smart-identity-engine` into `phase1/05-zero-trust-access` so that all implementation files are present. All 116 tests are now passing successfully!
+> Added 2 new integration tests in `server/__tests__/sshIntegration.test.js` implementing a local in-memory mock SSH/SFTP server to verify end-to-end connection resolution, zero-trust token verification, session lifecycle mapping, and abrupt termination cleanup.
+> Merged the documentation and tests from `phase1/01-smart-identity-engine` into `phase1/05-zero-trust-access` so that all implementation files are present. All 118 tests are now passing successfully!
 
 
 ## Security TODO
