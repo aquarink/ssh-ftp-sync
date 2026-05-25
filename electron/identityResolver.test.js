@@ -9,8 +9,15 @@ const { readCredentialSecret } = require('./credentialVault');
 const { createEphemeralCredential, clearSecretMaterial } = require('./ephemeralCredential');
 
 describe('electron/identityResolver - Security & Behavior Tests', () => {
+  const originalEnv = process.env;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env = { ...originalEnv, ENABLE_OS_SSH_AGENT: 'true' };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
   });
 
   describe('Metadata-Only Response Security', () => {

@@ -1,3 +1,17 @@
+## [2026-05-25] - Standalone SSH/SFTP Runtime Audit & Hardening
+
+- Objective: Make Ant Tech Async a fully standalone SSH/SFTP runtime independent of OS-level OpenSSH tooling (CLI, agent, keys, known_hosts, etc.).
+- Audit & Security Hardening:
+  - Audited the codebase to ensure zero usage of `child_process` (`spawn`, `exec`), `execa`, or local OpenSSH CLI files.
+  - Implemented explicit opt-in logic for OS-level `ssh-agent` integration via the `ENABLE_OS_SSH_AGENT=true` environment variable. By default, any attempt to resolve an `agent`-based identity is rejected.
+  - Enforced that the application does not automatically scan, list, or load keys from the local user's directory (`~/.ssh` or equivalent).
+- Spawning Guard Implementation:
+  - Implemented an automated guard test suite in `server/__tests__/sshSpawningGuard.test.js` to scan the codebase for forbidden execution patterns, ensuring `child_process` spawning or `.ssh` home directory file path building is not introduced.
+- Documentation:
+  - Added documentation to `README.md` clarifying that the application runs as a fully standalone library-based SSH runtime.
+- Verification:
+  - Confirmed all 125 Jest tests pass, and verified the build executes successfully.
+
 ## [2026-05-25] - Phase 4 - Localhost Bridge Proof-of-Concept
 
 - Objective: Implement an early Phase 4 proof-of-concept for localhost/loopback connectivity using a Local Secure Bridge model, ensuring secure localhost routing while preserving Phase 1 security boundaries.

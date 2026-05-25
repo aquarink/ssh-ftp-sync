@@ -477,6 +477,10 @@ function identityPayload(body) {
     if (runtime === 'browser') {
       throw Object.assign(new Error('Authentication method is not supported in browser runtime'), { status: 400 });
     }
+    const enableSshAgent = process.env.ENABLE_OS_SSH_AGENT === 'true';
+    if (!enableSshAgent) {
+      throw Object.assign(new Error('OS ssh-agent integration is disabled by default. Enable it via ENABLE_OS_SSH_AGENT=true.'), { status: 400 });
+    }
     secret = { type, agent: process.platform === 'win32' ? 'pageant' : (process.env.SSH_AUTH_SOCK || '') };
     secretProvided = true;
   }

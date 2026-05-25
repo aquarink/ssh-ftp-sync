@@ -119,6 +119,9 @@ function resolveSecretMaterial(credential, secret, runtime) {
 
   if (type === 'agent') {
     if (runtime === 'browser') browserRuntimeUnsupported();
+    if (process.env.ENABLE_OS_SSH_AGENT !== 'true') {
+      throw Object.assign(new Error('OS ssh-agent integration is disabled by default. Enable it via ENABLE_OS_SSH_AGENT=true.'), { status: 400 });
+    }
     if (typeof secret.agent !== 'string' || !secret.agent) credentialSecretUnavailable();
     return { agent: secret.agent };
   }

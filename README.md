@@ -20,6 +20,7 @@ Ant Tech Async is a playful working name for async remote operations. It is not 
 - A single repository that contains the frontend, backend API, and Electron desktop shell.
 - A research-oriented security project that implements identity scoping, secure secret storage, key isolation, session cleanup, and zero-trust access.
 - A Node.js backend is part of the project. It is not a separate external service.
+- **Fully standalone**: Ant Tech Async uses an embedded/library SSH runtime and does not require OpenSSH CLI, ssh-agent, ssh-add, or system scp/sftp binaries on the user machine.
 
 ## How It Works
 
