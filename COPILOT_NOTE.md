@@ -68,3 +68,9 @@ Notes:
 - ESLint configured minimally (eslint:recommended). For TypeScript-specific linting, consider adding @typescript-eslint tooling later.
 
 Committed: ci: add GitHub Actions workflow for tsc, eslint, and mock integration tests
+
+Additional changes implemented:
+- Added @typescript-eslint devDependencies and updated .eslintrc.json to include TypeScript rules.
+- Enhanced mock integration test to assert report contents and fail CI on regressions.
+- Added scripts/logs/parse_identity_logs.js to summarize vault/identity events from logs.
+- Added GitHub PR template and CHANGELOG.md.
