@@ -12,6 +12,7 @@ const {
   verifyPassword,
 } = require('./auth');
 const { verifySignupEmail } = require('./emailVerification');
+const { validateRegisterLegalConsent } = require('./legalPolicy');
 const { validateTurnstile } = require('./turnstile');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
@@ -26,7 +27,7 @@ const {
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
-  isLoopbackAddress,
+  classifyTargetHost,
   isUnspecifiedAddress,
   validateApiBindHost,
 } = require('./accessPolicy');
@@ -190,13 +191,7 @@ async function register(req, res) {
     throw Object.assign(new Error('A valid email is required'), { status: 400 });
   }
 
-  if (!body.agreeLegal) {
-    throw Object.assign(new Error('You must agree to the Terms & Conditions and Privacy Policy'), { status: 400 });
-  }
-
-  if (body.legalVersion !== '2026-05') {
-    throw Object.assign(new Error('Invalid legal agreement version'), { status: 400 });
-  }
+  validateRegisterLegalConsent(body);
 
   const emailCheck = await verifySignupEmail(email);
   const user = { id: randomUUID(), email };
@@ -693,20 +688,15 @@ async function testIdentity(req, res, id) {
     throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
   }
 
-  const isLoopback = isLoopbackAddress(host);
-  const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true';
   const runtime = String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser';
+  const targetClass = classifyTargetHost(host);
 
-  if (isLoopback) {
-    if (!isLocalBridgeEnabled && runtime !== 'electron') {
-      logIdentityEvent('loopbackDenied', { userId: user.id, host, runtime });
-      throw Object.assign(new Error('Loopback target not allowed in remote browser relay'), { status: 403 });
-    }
-  } else {
-    if (isLocalBridgeEnabled) {
-      logIdentityEvent('nonLoopbackDenied', { userId: user.id, host, runtime });
-      throw Object.assign(new Error('Local bridge is restricted to loopback targets only'), { status: 403 });
-    }
+  if (targetClass === 'WILDCARD_INVALID') {
+    throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
+  }
+  if (runtime === 'browser' && (targetClass === 'LOOPBACK' || targetClass === 'PRIVATE_LAN')) {
+    logIdentityEvent('localNetworkDeniedInBrowser', { userId: user.id, host, runtime, targetClass });
+    throw Object.assign(new Error('This target is local to your device. Please use Electron Desktop or Local Bridge.'), { status: 403 });
   }
 
   const resolved = await resolveIdentity({

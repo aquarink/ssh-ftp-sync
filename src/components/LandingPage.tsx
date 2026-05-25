@@ -79,6 +79,7 @@ const timeline = [
   { phase: '1.3', title: 'Key Isolation' },
   { phase: '1.4', title: 'Session Cleanup' },
   { phase: '1.5', title: 'Zero-Trust Access Layer' },
+  { phase: '4.0', title: 'Client Local Network Access' },
 ] as const;
 
 const whyItems = [
@@ -433,6 +434,19 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
         </section>
 
         <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <div className="mb-6 rounded-2xl border border-primary/25 bg-primary/10 p-5 sm:p-6">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-primary/90">
+              <ShieldCheck size={14} />
+              Phase 4
+            </div>
+            <h3 className="mt-2 text-lg font-semibold text-white sm:text-xl">Client Local Network Access</h3>
+            <p className="mt-2 text-sm leading-7 text-textMuted sm:text-base">
+              Browser relay blocks localhost and private LAN targets because they are local to the user's device, not
+              the hosted backend server. Local and VPN-private connections are supported through Electron runtime and
+              approved local bridge sessions with scoped short-lived authorization.
+            </p>
+          </div>
+
           <div className="rounded-[32px] border border-primary/20 bg-gradient-to-r from-primary/10 via-surface/80 to-background/70 p-6 sm:p-8">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>

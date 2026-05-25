@@ -29,31 +29,62 @@
   - `npm run test` passed with 132 tests across 9 suites.
   - The normal test run included `server/__tests__/sshSpawningGuard.test.js`.
 
-## [2026-05-25] - Phase 4 - Localhost Access Policy Gate and Bridge Runtime POC
+## [2026-05-25] - Phase 4 - Client Local Network Access Model
 
-- Objective: Implement an early Phase 4 access policy gate for localhost/loopback connectivity, then add a minimal local bridge runtime abstraction without claiming a full production Local Secure Bridge daemon.
+- Objective: Correct Phase 4 semantics so "local access" means connectivity from the user's laptop network context (Electron/local bridge), not localhost/private access from the remote browser relay backend.
 - Implementation summary:
-  - Added `isLoopbackAddress` helper function to validate loopback targets (`localhost`, `127.0.0.1`, `::1`, and `127.0.0.0/8`).
-  - Added explicit unspecified-address handling so `0.0.0.0`, `::`, and `[::]` are never treated as loopback and are rejected as connection targets.
-  - Configured `ENABLE_LOCALHOST_BRIDGE` feature flag inside access policy and connection handlers.
-  - Hardened connection gateways (`authorizeConnectRequest` and `testIdentity` in backend) to block loopback targets in remote browser relay mode, and restrict local bridge mode to loopback-only connections.
-  - Added strict target validations in Electron main process (`electron/sshHandler.js`) for `ssh-connect` and `identity-test` IPC handlers.
-  - Split production API binding from local bridge binding: production API bind behavior remains deployment-controlled, while local bridge runtime mode enforces loopback-only bind hosts.
-  - Added `LocalBridgeSessionManager` as a minimal bridge runtime abstraction with a loopback-only listener, token-scoped session map, short TTL, deterministic cleanup, and metadata-only logs.
-  - Wrote a unit test suite in `server/__tests__/localhostBridge.test.js` covering loopback detection, wildcard rejection, bridge bind rules, runtime TTL cleanup, and production API bind compatibility.
+  - Added `classifyTargetHost(host)` and helper classification in `server/accessPolicy.js`:
+    - `LOOPBACK`: `localhost`, `127.0.0.0/8`, `::1`
+    - `PRIVATE_LAN`: RFC1918 IPv4 (`10/8`, `172.16/12`, `192.168/16`) plus link-local `169.254/16`
+    - `WILDCARD_INVALID`: `0.0.0.0`, `::`, `[::]`
+    - `PUBLIC_REMOTE`: public IPv4
+    - `UNKNOWN_DOMAIN`: unresolved domain host
+  - Enforced browser relay policy in `authorizeConnectRequest`:
+    - browser runtime rejects `LOOPBACK` and `PRIVATE_LAN` with:
+      `This target is local to your device. Please use Electron Desktop or Local Bridge.`
+    - wildcard/unspecified targets are always rejected.
+  - Updated backend identity-test policy (`server/index.js`) with the same browser vs local-device guard behavior.
+  - Updated Electron runtime (`electron/sshHandler.js`) so it no longer blocks non-loopback targets when bridge flags are enabled; Electron now allows localhost/private/public by client reachability, while still rejecting wildcard invalid targets.
+  - Kept runtime as internal library-based SSH/SFTP (`ssh2`) with scoped connect-token validation, scoped identity resolution, and ephemeral credential cleanup.
+  - Extended local bridge runtime abstraction (`server/localBridge.js`):
+    - only `LOOPBACK` and `PRIVATE_LAN` targets,
+    - explicit per-target approval required,
+    - token-scoped short TTL sessions,
+    - deterministic listener/socket cleanup,
+    - metadata-only logs.
+  - Expanded test coverage in `server/__tests__/localhostBridge.test.js` for classification and runtime behavior:
+    - browser rejects loopback/private LAN,
+    - electron allows loopback/private LAN,
+    - wildcard invalid always rejected,
+    - public remote browser behavior unchanged.
 - Security decision:
-  - Keep browser runtime separated from direct localhost access.
-  - Block remote server relay from connecting to local loopback (SSRF protection).
-  - Always reject wildcard/unspecified connection targets (`0.0.0.0` and `::`) because they are bind/wildcard addresses, not destinations.
-  - Restrict the local bridge to loopback targets only when enabled, avoiding open proxy vulnerabilities.
-  - Do not force the normal production backend API to bind to loopback; reverse-proxy deployments may still bind according to their deployment topology.
-  - Preserve single-consumption connect token validation, ephemeral credential cleanup, and metadata-only logging.
+  - Browser relay must not become a path to backend-local/private network targets (SSRF and trust-boundary protection).
+  - Electron may access local/private/VPN-reachable targets because execution context is user laptop.
+  - Local bridge remains constrained and non-open-proxy by explicit approval + scoped token + short TTL + cleanup.
 - Current classification:
   - This is now an access policy gate plus a minimal local bridge runtime abstraction POC.
-  - It is not yet a full production Local Secure Bridge daemon because there is no dedicated supervised client process, installer, update channel, OS service integration, or authenticated control-plane lifecycle.
+  - It is still not a full production Local Secure Bridge daemon (no dedicated supervised local service lifecycle yet).
 - Acceptance test result:
-  - `npm run test` passed with 132 tests across 9 suites.
+  - `npm run test` passed with 143 tests across 11 suites.
   - `npm run build` completed successfully (`tsc`, Vite production build, and electron-builder).
+
+## [2026-05-25] - Legal Pages and Registration Consent Sync
+
+- Objective: finalize legal consent flow and public legal page accessibility without breaking existing users.
+- Implementation summary:
+  - Registration requires explicit legal consent and version validation before email verification and database insert.
+  - Registration insert explicitly stores `legal_accepted_version` and `legal_accepted_at`.
+  - Added `server/legalPolicy.js` plus tests (`server/__tests__/legalPolicy.test.js`) for:
+    - missing `agreeLegal` -> 400
+    - wrong `legalVersion` -> 400
+    - valid consent/version -> success
+  - Added route/link tests (`server/__tests__/legalPagesRouting.test.js`) to confirm:
+    - `/terms` and `/privacy` remain public routes,
+    - legal links exist in landing, auth page, and in-app account area.
+  - Migration `009_user_legal_consent.sql` uses `ADD COLUMN IF NOT EXISTS` to stay idempotent-safe.
+- Security/compatibility decision:
+  - Existing users remain compatible because new legal columns are nullable.
+  - Legal acceptance is enforced at registration-time for new users.
 
 ## [2026-05-24] - Phase 1.1 - Smart Identity Engine
 

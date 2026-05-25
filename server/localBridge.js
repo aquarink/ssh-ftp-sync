@@ -1,6 +1,6 @@
 const net = require('net');
 const { createHash } = require('crypto');
-const { isLoopbackAddress, isUnspecifiedAddress } = require('./accessPolicy');
+const { classifyTargetHost, isLoopbackAddress, isUnspecifiedAddress } = require('./accessPolicy');
 const { logAccessEvent } = require('./securityLog');
 
 function sessionLogId(token) {
@@ -23,12 +23,17 @@ class LocalBridgeSessionManager {
       throw new Error('Local bridge target port must be a valid TCP port');
     }
 
-    if (isUnspecifiedAddress(host)) {
+    const targetClass = classifyTargetHost(host);
+    if (targetClass === 'WILDCARD_INVALID' || isUnspecifiedAddress(host)) {
       throw new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed');
     }
 
-    if (!isLoopbackAddress(host)) {
-      throw new Error('Local bridge is restricted to loopback targets only');
+    if (targetClass !== 'LOOPBACK' && targetClass !== 'PRIVATE_LAN') {
+      throw new Error('Local bridge supports only client-local loopback or private LAN targets');
+    }
+
+    if (options.approved !== true) {
+      throw new Error('Local bridge requires explicit per-target approval');
     }
 
     const ttlMs = options.ttlMs || 30_000;
@@ -60,6 +65,7 @@ class LocalBridgeSessionManager {
         bridgeSessionId: logId,
         targetHost: host,
         targetPort: port,
+        targetClass,
         timestamp: new Date().toISOString()
       });
 
@@ -94,6 +100,7 @@ class LocalBridgeSessionManager {
         bridgeSessionId: logId,
         targetHost: host,
         targetPort: port,
+        targetClass,
         timestamp: new Date().toISOString()
       });
       this.cleanupSession(token);
@@ -108,6 +115,7 @@ class LocalBridgeSessionManager {
           bridgeSessionId: logId,
           targetHost: host,
           targetPort: port,
+          targetClass,
           localPort: session.localPort,
           timestamp: new Date().toISOString()
         });
@@ -146,6 +154,7 @@ class LocalBridgeSessionManager {
       bridgeSessionId: session.logId,
       targetHost: session.targetHost,
       targetPort: session.targetPort,
+      targetClass: classifyTargetHost(session.targetHost),
       timestamp: new Date().toISOString()
     });
   }

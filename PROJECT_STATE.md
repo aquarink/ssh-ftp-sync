@@ -32,6 +32,37 @@ Several features are implemented but still considered experimental:
 
 The API and storage model may still change while the project evolves into a stable open source architecture.
 
+## Phase 4.0 — Client Local Network Access
+
+Current local-access model is runtime-dependent and intentionally split by trust boundary:
+
+- Browser relay (`runtime=browser`):
+  - target connectivity is from hosted backend server context.
+  - rejects `LOOPBACK` and `PRIVATE_LAN` targets to prevent SSRF and backend-local/private misuse.
+  - rejects wildcard invalid targets (`0.0.0.0`, `::`) unconditionally.
+- Electron desktop (`runtime=electron`):
+  - target connectivity is from user laptop context.
+  - allows `LOOPBACK`, `PRIVATE_LAN`, and public remote targets if laptop network reachability exists.
+  - still enforces scoped connect-token validation, scoped identity resolution, and ephemeral credential cleanup.
+- Local bridge runtime abstraction:
+  - not a full daemon yet.
+  - supports `LOOPBACK` and `PRIVATE_LAN` only when explicitly approved per target.
+  - requires short-lived token-scoped session and deterministic cleanup.
+  - listener bind remains loopback-only for local safety.
+
+Target classification currently used in access policy:
+
+- `LOOPBACK`: `localhost`, `127.0.0.0/8`, `::1`
+- `PRIVATE_LAN`: RFC1918 IPv4 (`10/8`, `172.16/12`, `192.168/16`) plus link-local `169.254/16`
+- `WILDCARD_INVALID`: `0.0.0.0`, `::`
+- `PUBLIC_REMOTE`: public IPv4
+- `UNKNOWN_DOMAIN`: domain requiring runtime DNS resolution
+
+VM/VPN reachability model:
+
+- VMware/VirtualBox is supported by standard network reachability (NAT forwarded localhost port, host-only IP, or bridged LAN IP), not by VM API integration.
+- VPN-only private targets are reachable from Electron only when the user laptop has route/access to those VPN networks.
+
 ## Phase 1.1 — Smart Identity Engine
 
 What was built:
@@ -259,6 +290,7 @@ Research basis:
 - User passwords are hashed with Node `scrypt`.
 - Sessions are stored in MySQL and issued as HttpOnly cookies.
 - New registrations call QuickEmailVerification from the backend, then wait in `pending` state.
+- New registrations require legal consent (`agreeLegal=true`) and legal version validation (`2026-05`) before email verification and insert.
 - Login and registration submit only after a Cloudflare Turnstile token is issued, and the API validates that token with Siteverify.
 - Administrators can approve or reject users from the Account -> Users panel.
 - Rejected users are blocked at login with a rejection message.
@@ -306,6 +338,7 @@ Security work is an active research area in this project.
   - MySQL-backed session records.
   - Admin approval before normal users can sign in.
   - Turnstile protection for login/register.
+  - Browser relay rejects localhost/private-LAN targets and instructs users to use Electron/local bridge for client-local access.
   - Nginx security headers and WAF rules in the preview deployment.
 - Research disclaimer:
   - Experimental features require additional security review before production use.

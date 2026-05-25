@@ -119,6 +119,7 @@ function isLoopbackAddress(hostStr) {
   return (
     h === 'localhost' ||
     h === '127.0.0.1' ||
+    h === '[::1]' ||
     h === '::1' ||
     /^127\.\d+\.\d+\.\d+$/.test(h)
   );
@@ -128,6 +129,40 @@ function isUnspecifiedAddress(hostStr) {
   if (!hostStr) return false;
   const h = hostStr.trim().toLowerCase();
   return h === '0.0.0.0' || h === '::' || h === '[::]';
+}
+
+function isPrivateLanAddress(hostStr) {
+  if (!hostStr) return false;
+  const h = hostStr.trim().toLowerCase();
+  if (h.startsWith('10.')) return true;
+  if (h.startsWith('192.168.')) return true;
+  if (h.startsWith('169.254.')) return true;
+  const match172 = h.match(/^172\.(\d{1,3})\./);
+  if (match172) {
+    const second = Number(match172[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+function isPublicIpv4Address(hostStr) {
+  if (!hostStr) return false;
+  const h = hostStr.trim().toLowerCase();
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return false;
+  const octets = h.split('.').map((part) => Number(part));
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
+  if (isLoopbackAddress(h) || isUnspecifiedAddress(h) || isPrivateLanAddress(h)) return false;
+  return true;
+}
+
+function classifyTargetHost(hostStr) {
+  const h = String(hostStr || '').trim().toLowerCase();
+  if (!h) return 'UNKNOWN_DOMAIN';
+  if (isUnspecifiedAddress(h)) return 'WILDCARD_INVALID';
+  if (isLoopbackAddress(h)) return 'LOOPBACK';
+  if (isPrivateLanAddress(h)) return 'PRIVATE_LAN';
+  if (isPublicIpv4Address(h)) return 'PUBLIC_REMOTE';
+  return 'UNKNOWN_DOMAIN';
 }
 
 function isLocalBridgeRuntimeEnabled(env = process.env) {
@@ -177,8 +212,8 @@ async function authorizeConnectRequest(userId, body = {}) {
 
   const host = await loadHost(userId, hostId);
 
-  // Validate loopback / localhost bridge constraints
-  if (isUnspecifiedAddress(host.host)) {
+  const targetClass = classifyTargetHost(host.host);
+  if (targetClass === 'WILDCARD_INVALID') {
     rejectAccess('wildcard_target_denied', {
       userId,
       hostId: host.id,
@@ -188,29 +223,15 @@ async function authorizeConnectRequest(userId, body = {}) {
     throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
   }
 
-  const isLoopback = isLoopbackAddress(host.host);
-  const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true';
-
-  if (isLoopback) {
-    if (!isLocalBridgeEnabled && runtime !== 'electron') {
-      rejectAccess('loopback_denied_in_browser', {
-        userId,
-        hostId: host.id,
-        runtime,
-        purpose,
-      });
-      throw Object.assign(new Error('Loopback target not allowed in remote browser relay'), { status: 403 });
-    }
-  } else {
-    if (isLocalBridgeEnabled) {
-      rejectAccess('non_loopback_denied_in_local_bridge', {
-        userId,
-        hostId: host.id,
-        runtime,
-        purpose,
-      });
-      throw Object.assign(new Error('Local bridge is restricted to loopback targets only'), { status: 403 });
-    }
+  if (runtime === 'browser' && (targetClass === 'LOOPBACK' || targetClass === 'PRIVATE_LAN')) {
+    rejectAccess('local_network_denied_in_browser', {
+      userId,
+      hostId: host.id,
+      runtime,
+      purpose,
+      targetClass,
+    });
+    throw Object.assign(new Error('This target is local to your device. Please use Electron Desktop or Local Bridge.'), { status: 403 });
   }
 
   const hostAuthType = normalizeAuthType(host.authType || null);
@@ -288,8 +309,11 @@ module.exports = {
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
+  classifyTargetHost,
+  isPrivateLanAddress,
   isLocalBridgeRuntimeEnabled,
   isLoopbackAddress,
+  isPublicIpv4Address,
   isUnspecifiedAddress,
   validateApiBindHost,
 };

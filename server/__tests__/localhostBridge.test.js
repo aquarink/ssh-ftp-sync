@@ -1,6 +1,9 @@
 const {
   authorizeConnectRequest,
+  classifyTargetHost,
   isLoopbackAddress,
+  isPrivateLanAddress,
+  isPublicIpv4Address,
   isUnspecifiedAddress,
   validateApiBindHost,
 } = require('../accessPolicy');
@@ -22,7 +25,7 @@ jest.mock('../securityMetrics', () => ({
   incrementMetric: jest.fn(),
 }));
 
-describe('Localhost Bridge POC Security Policy', () => {
+describe('Client Local Network Access Policy', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -59,11 +62,29 @@ describe('Localhost Bridge POC Security Policy', () => {
       expect(isUnspecifiedAddress('127.0.0.1')).toBe(false);
       expect(isUnspecifiedAddress('::1')).toBe(false);
     });
+
+    test('identifies private LAN and public IPv4 classes', () => {
+      expect(isPrivateLanAddress('192.168.1.10')).toBe(true);
+      expect(isPrivateLanAddress('10.0.2.15')).toBe(true);
+      expect(isPrivateLanAddress('172.16.0.5')).toBe(true);
+      expect(isPrivateLanAddress('172.31.255.1')).toBe(true);
+      expect(isPrivateLanAddress('172.32.0.1')).toBe(false);
+      expect(isPublicIpv4Address('8.8.8.8')).toBe(true);
+      expect(isPublicIpv4Address('192.168.1.1')).toBe(false);
+    });
+
+    test('classifies target hosts for runtime policy decisions', () => {
+      expect(classifyTargetHost('localhost')).toBe('LOOPBACK');
+      expect(classifyTargetHost('127.10.20.30')).toBe('LOOPBACK');
+      expect(classifyTargetHost('192.168.56.101')).toBe('PRIVATE_LAN');
+      expect(classifyTargetHost('0.0.0.0')).toBe('WILDCARD_INVALID');
+      expect(classifyTargetHost('8.8.8.8')).toBe('PUBLIC_REMOTE');
+      expect(classifyTargetHost('example.com')).toBe('UNKNOWN_DOMAIN');
+    });
   });
 
-  describe('authorizeConnectRequest - Loopback & Local Bridge Constraints', () => {
-    test('blocks loopback targets in browser mode when ENABLE_LOCALHOST_BRIDGE is false', async () => {
-      process.env.ENABLE_LOCALHOST_BRIDGE = 'false';
+  describe('authorizeConnectRequest - Runtime local network constraints', () => {
+    test('browser runtime rejects loopback targets', async () => {
       pool.execute.mockResolvedValueOnce([[{
         id: 'host-123',
         userId: 'user-123',
@@ -91,16 +112,108 @@ describe('Localhost Bridge POC Security Policy', () => {
           authType: 'password',
           connectToken: token,
         })
-      ).rejects.toThrow('Loopback target not allowed in remote browser relay');
+      ).rejects.toThrow('This target is local to your device. Please use Electron Desktop or Local Bridge.');
     });
 
-    test('allows loopback targets in browser mode when ENABLE_LOCALHOST_BRIDGE is true (local bridge mode)', async () => {
-      process.env.ENABLE_LOCALHOST_BRIDGE = 'true';
+    test('browser runtime rejects private LAN targets', async () => {
       pool.execute.mockResolvedValueOnce([[{
         id: 'host-123',
         userId: 'user-123',
-        name: 'Local Test',
+        name: 'Private LAN Test',
+        host: '192.168.56.101',
+        port: 22,
+        username: 'root',
+        authType: 'password',
+        credentialId: null,
+      }]]);
+
+      const { token } = issueConnectToken({
+        userId: 'user-123',
+        hostId: 'host-123',
+        runtime: 'browser',
+        purpose: 'ssh',
+        authType: 'password',
+      });
+
+      await expect(
+        authorizeConnectRequest('user-123', {
+          hostId: 'host-123',
+          runtime: 'browser',
+          purpose: 'ssh',
+          authType: 'password',
+          connectToken: token,
+        })
+      ).rejects.toThrow('This target is local to your device. Please use Electron Desktop or Local Bridge.');
+    });
+
+    test('electron runtime allows loopback targets', async () => {
+      pool.execute.mockResolvedValueOnce([[{
+        id: 'host-123',
+        userId: 'user-123',
+        name: 'Loopback Electron Test',
         host: '127.0.0.1',
+        port: 22,
+        username: 'root',
+        authType: 'password',
+        credentialId: null,
+      }]]);
+
+      const { token } = issueConnectToken({
+        userId: 'user-123',
+        hostId: 'host-123',
+        runtime: 'electron',
+        purpose: 'ssh',
+        authType: 'password',
+      });
+
+      const result = await authorizeConnectRequest('user-123', {
+        hostId: 'host-123',
+        runtime: 'electron',
+        purpose: 'ssh',
+        authType: 'password',
+        connectToken: token,
+      });
+
+      expect(result.host.host).toBe('127.0.0.1');
+    });
+
+    test('electron runtime allows private LAN targets', async () => {
+      pool.execute.mockResolvedValueOnce([[{
+        id: 'host-123',
+        userId: 'user-123',
+        name: 'Private Electron Test',
+        host: '10.0.2.15',
+        port: 22,
+        username: 'root',
+        authType: 'password',
+        credentialId: null,
+      }]]);
+
+      const { token } = issueConnectToken({
+        userId: 'user-123',
+        hostId: 'host-123',
+        runtime: 'electron',
+        purpose: 'ssh',
+        authType: 'password',
+      });
+
+      const result = await authorizeConnectRequest('user-123', {
+        hostId: 'host-123',
+        runtime: 'electron',
+        purpose: 'ssh',
+        authType: 'password',
+        connectToken: token,
+      });
+
+      expect(result.host.host).toBe('10.0.2.15');
+    });
+
+    test('browser runtime keeps public remote host behavior unchanged', async () => {
+      pool.execute.mockResolvedValueOnce([[{
+        id: 'host-123',
+        userId: 'user-123',
+        name: 'Public Remote Test',
+        host: '8.8.8.8',
         port: 22,
         username: 'root',
         authType: 'password',
@@ -123,7 +236,7 @@ describe('Localhost Bridge POC Security Policy', () => {
         connectToken: token,
       });
 
-      expect(result.host.host).toBe('127.0.0.1');
+      expect(result.host.host).toBe('8.8.8.8');
     });
 
     test('blocks unspecified / wildcard target 0.0.0.0 connection attempts', async () => {
@@ -193,30 +306,38 @@ describe('Localhost Bridge POC Security Policy', () => {
     test('rejects connection targets that are unspecified (0.0.0.0 or ::)', () => {
       const manager = new LocalBridgeSessionManager();
       expect(() => {
-        manager.createSession('test-token', '0.0.0.0', 22);
+        manager.createSession('test-token', '0.0.0.0', 22, { approved: true });
       }).toThrow('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed');
 
       expect(() => {
-        manager.createSession('test-token', '::', 22);
+        manager.createSession('test-token', '::', 22, { approved: true });
       }).toThrow('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed');
     });
 
     test('rejects binding local bridge listener to unspecified addresses (0.0.0.0 or ::)', () => {
       const manager = new LocalBridgeSessionManager();
       expect(() => {
-        manager.createSession('test-token', '127.0.0.1', 22, { bindHost: '0.0.0.0' });
+        manager.createSession('test-token', '127.0.0.1', 22, { bindHost: '0.0.0.0', approved: true });
       }).toThrow('Local bridge listener must bind only to a loopback address');
 
       expect(() => {
-        manager.createSession('test-token', '127.0.0.1', 22, { bindHost: '::' });
+        manager.createSession('test-token', '127.0.0.1', 22, { bindHost: '::', approved: true });
       }).toThrow('Local bridge listener must bind only to a loopback address');
     });
 
-    test('allows binding listener to valid loopback address and performs short TTL cleanup', async () => {
+    test('rejects non-approved local bridge session', () => {
       const manager = new LocalBridgeSessionManager();
-      const session = await manager.createSession('test-token-valid', '127.0.0.1', 22, {
+      expect(() => {
+        manager.createSession('test-token-no-approval', '127.0.0.1', 22, { bindHost: '127.0.0.1' });
+      }).toThrow('Local bridge requires explicit per-target approval');
+    });
+
+    test('allows private LAN target with explicit approval and performs short TTL cleanup', async () => {
+      const manager = new LocalBridgeSessionManager();
+      const session = await manager.createSession('test-token-valid', '192.168.56.10', 22, {
         bindHost: '127.0.0.1',
         ttlMs: 50,
+        approved: true,
       });
 
       expect(session.localPort).toBeGreaterThan(0);
