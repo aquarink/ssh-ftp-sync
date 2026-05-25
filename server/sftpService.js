@@ -18,11 +18,10 @@ function remotePath(value = '/') {
   if (typeof value !== 'string' || value.includes('\0')) {
     throw Object.assign(new Error('Invalid remote path'), { status: 400 });
   }
-  const normalized = path.posix.normalize(value.startsWith('/') ? value : `/${value}`);
-  if (normalized.split('/').includes('..')) {
+  if (value.split('/').includes('..')) {
     throw Object.assign(new Error('Remote path traversal is not allowed'), { status: 400 });
   }
-  return normalized;
+  return path.posix.normalize(value.startsWith('/') ? value : `/${value}`);
 }
 
 function joinRemote(base, name) {
@@ -354,4 +353,6 @@ async function runSftpOperation(hostConfig, operation, payload = {}) {
 module.exports = {
   runSftpOperation,
   remotePath,
+  mutableRemotePath,
+  joinRemote,
 };
