@@ -26,6 +26,7 @@ const {
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
+  isLoopbackAddress,
 } = require('./accessPolicy');
 const { getSecurityMetrics } = require('./securityMetrics');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
@@ -673,10 +674,27 @@ async function testIdentity(req, res, id) {
   const username = String(body.username || '').trim();
   const port = Number.parseInt(body.port, 10) || 22;
   if (!host || !username) throw Object.assign(new Error('Host and username are required'), { status: 400 });
+
+  const isLoopback = isLoopbackAddress(host);
+  const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true';
+  const runtime = String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser';
+
+  if (isLoopback) {
+    if (!isLocalBridgeEnabled && runtime !== 'electron') {
+      logIdentityEvent('loopbackDenied', { userId: user.id, host, runtime });
+      throw Object.assign(new Error('Loopback target not allowed in remote browser relay'), { status: 403 });
+    }
+  } else {
+    if (isLocalBridgeEnabled) {
+      logIdentityEvent('nonLoopbackDenied', { userId: user.id, host, runtime });
+      throw Object.assign(new Error('Local bridge is restricted to loopback targets only'), { status: 403 });
+    }
+  }
+
   const resolved = await resolveIdentity({
     userId: user.id,
     hostId: null,
-    runtime: String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser',
+    runtime,
     authType: body.authType || null,
     credentialId: id,
     purpose: 'test_connection',
@@ -997,6 +1015,12 @@ const server = http.createServer((req, res) => {
 
 attachSshWebSocket(server);
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Ant Tech Async API listening on http://127.0.0.1:${port}`);
+const apiBindHost = process.env.API_BIND_HOST || '127.0.0.1';
+if (!isLoopbackAddress(apiBindHost) || apiBindHost === '0.0.0.0' || apiBindHost === '::') {
+  console.error("CRITICAL: Listener must bind only to a loopback address (127.0.0.1 or ::1), never 0.0.0.0 or external interfaces.");
+  process.exit(1);
+}
+
+server.listen(port, apiBindHost, () => {
+  console.log(`Ant Tech Async API listening on http://${apiBindHost}:${port}`);
 });

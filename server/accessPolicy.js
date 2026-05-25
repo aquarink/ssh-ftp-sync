@@ -113,6 +113,19 @@ async function issueConnectAuthorization(userId, body = {}) {
   });
 }
 
+function isLoopbackAddress(hostStr) {
+  if (!hostStr) return false;
+  const h = hostStr.trim().toLowerCase();
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '::1' ||
+    /^127\.\d+\.\d+\.\d+$/.test(h) ||
+    h === '0.0.0.0' ||
+    h === '::'
+  );
+}
+
 async function authorizeConnectRequest(userId, body = {}) {
   const request = validateConnectTokenRequest(body);
   const runtime = request.runtime;
@@ -139,6 +152,33 @@ async function authorizeConnectRequest(userId, body = {}) {
   }
 
   const host = await loadHost(userId, hostId);
+
+  // Validate loopback / localhost bridge constraints
+  const isLoopback = isLoopbackAddress(host.host);
+  const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true';
+
+  if (isLoopback) {
+    if (!isLocalBridgeEnabled && runtime !== 'electron') {
+      rejectAccess('loopback_denied_in_browser', {
+        userId,
+        hostId: host.id,
+        runtime,
+        purpose,
+      });
+      throw Object.assign(new Error('Loopback target not allowed in remote browser relay'), { status: 403 });
+    }
+  } else {
+    if (isLocalBridgeEnabled) {
+      rejectAccess('non_loopback_denied_in_local_bridge', {
+        userId,
+        hostId: host.id,
+        runtime,
+        purpose,
+      });
+      throw Object.assign(new Error('Local bridge is restricted to loopback targets only'), { status: 403 });
+    }
+  }
+
   const hostAuthType = normalizeAuthType(host.authType || null);
   const selectedCredentialId = credentialId || host.credentialId || null;
   const effectiveAuthType = authType || hostAuthType || null;
@@ -214,4 +254,5 @@ module.exports = {
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
+  isLoopbackAddress,
 };

@@ -1,3 +1,22 @@
+## [2026-05-25] - Phase 4 - Localhost Bridge Proof-of-Concept
+
+- Objective: Implement an early Phase 4 proof-of-concept for localhost/loopback connectivity using a Local Secure Bridge model, ensuring secure localhost routing while preserving Phase 1 security boundaries.
+- Implementation summary:
+  - Added `isLoopbackAddress` helper function to validate loopback targets (`localhost`, `127.0.0.1`, `::1`, etc.).
+  - Configured `ENABLE_LOCALHOST_BRIDGE` feature flag inside access policy and connection handlers.
+  - Hardened connection gateways (`authorizeConnectRequest` and `testIdentity` in backend) to block loopback targets in remote browser relay mode, and restrict local bridge mode to loopback-only connections.
+  - Added strict loopback validations in Electron main process (`electron/sshHandler.js`) for `ssh-connect` and `identity-test` IPC handlers.
+  - Enforced loopback-only binding on API/bridge listener (blocks `0.0.0.0` or external network bindings).
+  - Wrote a comprehensive unit test suite in `server/__tests__/localhostBridge.test.js` covering loopback detection and access rules.
+- Security decision:
+  - Keep browser runtime separated from direct localhost access.
+  - Block remote server relay from connecting to local loopback (SSRF protection).
+  - Restrict the local bridge to loopback targets only when enabled, avoiding open proxy vulnerabilities.
+  - Preserve single-consumption connect token validation, ephemeral credential cleanup, and metadata-only logging.
+- Acceptance test result:
+  - Successfully built and packaged the hybrid application (`npm run build`).
+  - Added 6 new tests to the test suite, with all 123 tests passing successfully.
+
 ## [2026-05-24] - Phase 1.1 - Smart Identity Engine
 
 - Objective: build a scoped identity resolver for SSH/SFTP/FTP runtime connections so host sessions only use explicitly assigned or explicitly selected identities.
