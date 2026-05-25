@@ -14,22 +14,65 @@ The project is inspired by the operational workflows of tools such as Termius, M
 
 Ant Tech Async is a playful working name for async remote operations. It is not intended as a political statement or a reference to any foreign affiliation. The goal is a short, memorable name that still matches the project's focus on secure SSH, SFTP, identity isolation, and zero-trust access.
 
-## Main Features
+## What This Project Is
 
-- Multiple SSH tabs.
-- Multi-session terminal management.
+- A self-hosted SSH/SFTP/FTP management app with browser and desktop modes.
+- A single repository that contains the frontend, backend API, and Electron desktop shell.
+- A research-oriented security project that implements identity scoping, secure secret storage, key isolation, session cleanup, and zero-trust access.
+- A Node.js backend is part of the project. It is not a separate external service.
+
+## How It Works
+
+1. The React frontend in `src/` renders the landing page, auth screens, host manager, terminal UI, and file manager.
+2. The Node HTTP API in `server/` handles auth, sessions, hosts, credentials, connect tokens, browser SSH relay, and SFTP operations.
+3. Browser mode uses `/api/ssh` as an authenticated WebSocket relay and `/api/security/connect-token` for short-lived connect authorization.
+4. Electron mode uses the main process in `electron/` plus the local API on `127.0.0.1:8790` for token issuance and SFTP authorization.
+5. SSH, SFTP, and identity flows all resolve secret material only when needed, then clean it up after use.
+
+## Core Files
+
+| Path | Role |
+| --- | --- |
+| `src/App.tsx` | Main app shell, route handling, host/terminal layout, and mode switching. |
+| `src/components/LandingPage.tsx` | Public landing page and feature showcase. |
+| `src/components/TerminalView.tsx` | Terminal UI and SSH connect lifecycle for browser/desktop. |
+| `src/components/SftpFileManager.tsx` | File manager UI and SFTP operation flow. |
+| `src/lib/api.ts` | Browser API client for auth, hosts, security, and SFTP calls. |
+| `server/index.js` | Main Node HTTP API router. |
+| `server/sshWebSocket.js` | Browser SSH relay over WebSocket. |
+| `server/accessPolicy.js` | Connect-token issuance and scope validation. |
+| `server/connectToken.js` | Token creation, validation, and invalidation. |
+| `server/identityResolver.js` | Host/identity resolution and secret material loading. |
+| `server/sftpService.js` | SFTP backend operations. |
+| `electron/main.js` | Electron main entrypoint. |
+| `electron/sshHandler.js` | Electron SSH and SFTP IPC bridge. |
+| `electron/credentialVault.js` | Electron secure storage helper. |
+
+## Implemented Features
+
+- Multiple SSH tabs and multi-session terminal management.
 - SFTP/FTP file manager.
-- Secure SSH identities/keychain.
-- SSH private key and certificate support.
+- Host management with create, edit, duplicate, delete, and identity assignment.
+- Secure SSH identities and keychain support.
 - Browser mode through authenticated WebSocket relay.
 - Electron desktop mode.
-- Host management with create, edit, duplicate, delete, and identity assignment.
 - Session management with HttpOnly cookies.
-- Cross-platform direction for Linux, Windows, and macOS.
 - Admin/user approval system.
 - Cloudflare Turnstile-protected auth forms.
 - Modern dark UI built with TailwindCSS and Lucide icons.
-- Experimental research features for plugins, AI-assisted terminal workflows, and team collaboration.
+- Research-guided security controls for zero-trust connect flow, secret isolation, vault hardening, and session cleanup.
+
+## Phase 1 Implemented
+
+Phase 1 is the security foundation already implemented in this repo:
+
+- Phase 1.1 Smart Identity Engine: scoped identity resolution so a host/session only uses explicitly assigned or explicitly selected credentials.
+- Phase 1.2 Secure Vault: encrypted secret storage with metadata-only API responses and redacted logs.
+- Phase 1.3 Key Isolation: ephemeral secret exposure with resolve-then-connect lifecycle and best-effort cleanup.
+- Phase 1.4 Session Cleanup: deterministic teardown for SSH, SFTP, browser relay, Electron IPC, and abandoned sessions.
+- Phase 1.5 Zero-Trust Access: short-lived connect tokens, runtime scope checks, and one-time authorization before runtime access.
+
+This is the set of features the landing page should be able to summarize as "kami pakai ini loh" for the public repo.
 
 ## Tech Stack
 
@@ -46,7 +89,7 @@ Ant Tech Async is a playful working name for async remote operations. It is not 
 | Deployment | Nginx |
 | Security Add-ons | HttpOnly cookies, Turnstile, optional Nginx WAF |
 
-## Installation
+## Run It
 
 ### Prerequisites
 
@@ -82,11 +125,19 @@ Edit `.env` with your local values.
 npm run migrate
 ```
 
-### Start Development API
+### Start the API
+
+This project does not require `pm2`. The API is a plain Node.js process started by the repo scripts.
 
 ```bash
 npm run api
 ```
+
+What this starts:
+
+- The backend HTTP API on `API_PORT` from `.env` or `8790` by default.
+- Auth/session routes, host routes, connect-token routes, browser SSH relay, and SFTP endpoints.
+- The same API used by both browser mode and Electron mode.
 
 ### Start Browser Development UI
 
@@ -112,15 +163,36 @@ npm run desktop
 npm run build
 ```
 
+### Full Local Flow
+
+If you want to run everything locally from scratch:
+
+1. Clone the repository.
+2. Install dependencies with `npm install`.
+3. Copy `.env.example` to `.env` and fill in MySQL and secret values.
+4. Run migrations with `npm run migrate`.
+5. Start the API with `npm run api`.
+6. Start the browser UI with `npm run dev`, or start the desktop app with `npm run desktop`.
+7. Open `http://127.0.0.1:5173/` for browser mode.
+8. Use Electron mode when you want the desktop shell and OS-backed secure storage.
+
 ### Production Notes
 
 For production-style browser deployment:
 
 1. Build the Vite app.
 2. Serve `dist/` from Nginx.
-3. Proxy `/api/` and `/api/ssh` to the Node API.
+3. Proxy `/api/` and `/api/ssh` to the Node API process.
 4. Run migrations before deploying backend changes.
-5. Use strong secrets and a secure vault key.
+5. Start the API with your preferred process manager, init system, or service manager.
+6. Use strong secrets and a secure vault key.
+
+Examples of how the API can be kept running:
+
+- `npm run api` in a terminal during development.
+- `nohup npm run api >/tmp/ant-tech-async-api.log 2>&1 &` for a simple detached process.
+- `systemd`, Docker, or another host-level service manager in production.
+- `pm2` is optional if you want to use it, but this repository does not depend on it.
 
 ## Development Workflow
 
@@ -176,15 +248,16 @@ This project is still experimental and requires additional security audit before
 - Admin approval is required before normal users can sign in.
 - SSH certificate and agent support are active compatibility research areas.
 
-## Research-Guided Security Features
+## Phase 1 Notes
 
-- Smart Identity Engine for scoped credential resolution.
+### Phase 1.1 Smart Identity Engine
+
 - Scoped identity selection per host and session.
 - No auto-offer of all keys or identities.
 - Browser and Electron runtime-specific policy enforcement.
 - Secret resolution only during connection setup.
 
-### Secure Vault
+### Phase 1.2 Secure Vault
 
 - Metadata-only identity API responses.
 - Encrypted secret storage for browser/server and Electron runtimes.
@@ -193,7 +266,7 @@ This project is still experimental and requires additional security audit before
 - Clear browser/Electron vault boundary.
 - Legacy password migration note for compatibility-only host records.
 
-### Key Isolation
+### Phase 1.3 Key Isolation
 
 - Ephemeral credential wrappers with short TTL metadata.
 - Resolve-then-connect lifecycle for SSH, SFTP, and identity test flows.
@@ -201,55 +274,8 @@ This project is still experimental and requires additional security audit before
 - Best-effort secret cleanup with nested object deletion and Buffer overwrite.
 - Browser and Electron runtimes clear secret material after use in their own trust boundaries.
 - Reconnect and SFTP resolve fresh identity material instead of reusing cached secrets.
-- Research references by title only:
-  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
-  - On the Security of SSH Client Signatures
-  - Practical Privacy-Preserving Authentication for SSH
-  - Enabling Secure Shell Access with OpenID Connect
-  - Towards SSH3: how HTTP/3 improves secure shells
 
-### Zero-Trust Access Layer
-
-- Short-lived connect authorization before SSH or SFTP runtime access.
-- One-time connect tokens scoped to user, host, runtime, purpose, and optional authType or identity.
-- Browser relay authorization boundary that validates token scope before identity resolution.
-- Electron runtime authorization that still validates session context and consumes a fresh token before connect.
-- Token invalidation on logout, host deletion, identity deletion, reconnect failure, and validation failure.
-- Metadata-only logging and metrics for token issuance, validation, rejection, expiration, reuse, and runtime-policy denial.
-- Research references by title only:
-  - Brute-force attack mitigation on remote access services via software-defined perimeter
-  - Enabling Secure Shell Access with OpenID Connect
-  - Practical Privacy-Preserving Authentication for SSH
-  - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
-  - Towards SSH3: how HTTP/3 improves secure shells
-  - Emerging research areas in SIP-based converged services for extended Web clients
-
-### Research References
-
-- Practical Privacy-Preserving Authentication for SSH
-- On the Security of SSH Client Signatures
-- Enabling Secure Shell Access with OpenID Connect
-- SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
-- Towards SSH3: how HTTP/3 improves secure shells
-
-### Research-Guided Security Features
-
-#### Key Isolation
-
-- Ephemeral credential wrapper keeps resolved secret material inside a short-lived runtime object.
-- Resolve-then-connect ensures secrets are only available for the connection attempt that needs them.
-- Long-lived session state stays metadata-only.
-- Secret cleanup is best-effort and runs after connect attempts, failures, and test operations.
-- Reconnect resolves identity again instead of reusing cached secret material.
-- Browser and Electron runtimes use separate secret boundaries so renderer state never receives resolved secrets.
-- Research references:
-  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
-  - On the Security of SSH Client Signatures
-  - Practical Privacy-Preserving Authentication for SSH
-  - Enabling Secure Shell Access with OpenID Connect
-  - Towards SSH3: how HTTP/3 improves secure shells
-
-#### Session Cleanup
+### Phase 1.4 Session Cleanup
 
 - Deterministic session lifecycle keeps SSH and SFTP sessions in explicit states.
 - Session maps remain metadata-only and do not store raw credential material.
@@ -257,27 +283,23 @@ This project is still experimental and requires additional security audit before
 - Browser WebSocket cleanup, Electron IPC cleanup, reconnect cleanup, and SFTP cleanup all flow through a central teardown path.
 - A stale-session sweeper removes abandoned pending sessions.
 - Frontend terminal and file-manager components dispose listeners, timers, and observers on unmount.
-- Research references:
-  - SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
-  - On the Security of SSH Client Signatures
-  - Practical Privacy-Preserving Authentication for SSH
-  - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
-  - Emerging research areas in SIP-based converged services for extended Web clients
-  - Towards SSH3: how HTTP/3 improves secure shells
 
-### Experimental Features
+### Phase 1.5 Zero-Trust Access Layer
 
-- Browser SSH relay.
-- Electron SSH IPC sessions.
-- Scoped identity assignment and metadata-only identity listing.
-- Runtime-specific secure storage routing.
+- Short-lived connect authorization before SSH or SFTP runtime access.
+- One-time connect tokens scoped to user, host, runtime, purpose, and optional authType or identity.
+- Browser relay authorization boundary that validates token scope before identity resolution.
+- Electron runtime authorization that still validates session context and consumes a fresh token before connect.
+- Token invalidation on logout, host deletion, identity deletion, reconnect failure, and validation failure.
+- Metadata-only logging and metrics for token issuance, validation, rejection, expiration, reuse, and runtime-policy denial.
 
-### Security Architecture
+## Research References
 
-- Browser mode resolves secrets from the server-encrypted vault only.
-- Electron mode resolves secrets from local secure storage only.
-- Identity metadata is exposed separately from secret material.
-- Host-to-credential assignment is enforced before connection setup.
+- Practical Privacy-Preserving Authentication for SSH
+- On the Security of SSH Client Signatures
+- Enabling Secure Shell Access with OpenID Connect
+- SSHkex: Leveraging Virtual Machine Introspection for Extracting SSH Keys and Decrypting SSH Network Traffic
+- Towards SSH3: how HTTP/3 improves secure shells
 
 ## Open Source & Contribution
 
@@ -303,13 +325,15 @@ Suggested contribution flow:
 4. Keep changes scoped and documented.
 5. Open a pull request with screenshots or terminal output when relevant.
 
-## Roadmap
+## Public Roadmap
 
 This roadmap reflects the current baseline of the project.
 
 - Done: Phase 1 is already implemented above.
 - Next: Phase 2 research work.
 - Later: Phase 3 research work.
+
+The next research milestones are intentionally public so contributors can join the security work:
 
 ### Phase 2
 
@@ -322,6 +346,19 @@ This roadmap reflects the current baseline of the project.
 - SSH3/QUIC.
 - Browser-native relay.
 - Session mobility.
+
+### Later Product Work
+
+- FTP support.
+- SSH certificates hardening.
+- Session persistence.
+- Host grouping and filters.
+- Remote monitoring.
+- Plugin system.
+- AI-assisted terminal workflows.
+- Team collaboration.
+- Security audit.
+- Stable open source release.
 
 ## License
 
