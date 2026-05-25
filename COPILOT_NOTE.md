@@ -32,3 +32,22 @@ Commit
 - Committed with message: "fix(electron): await resolveIdentity in sshHandler to ensure resolved identity not Promise"
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+---
+Integration run: 2026-05-25
+
+Observations:
+- Server already running on 127.0.0.1:8790 (PID 2962703). Attempt to start another server failed with EADDRINUSE.
+- Vault-health GET returned 401 Unauthorized from existing server instance.
+
+TypeScript check:
+- ./node_modules/.bin/tsc --noEmit completed without errors.
+
+Lint:
+- npm run lint failed in this environment: eslint executable not found (eslint not installed as dependency).
+
+Next steps recommended:
+1. If you want a fresh server instance for testing, stop PID 2962703 and restart server here with TEST env (set CREDENTIAL_VAULT_KEY or SESSION_SECRET).
+2. Run Electron integration locally (requires GUI environment). I can provide exact steps.
+3. Install eslint (dev dependency) or run lint in CI where dependencies are installed.
+
