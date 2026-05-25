@@ -558,14 +558,36 @@ function App() {
       if (fAuthType === 'identity' && !fCredentialId) {
         throw new Error('Select an identity for this host');
       }
+      if (fAuthType === 'password' && !fPass) {
+        throw new Error('Enter a password or select a saved identity');
+      }
+
+      let credentialId = fAuthType === 'identity' ? fCredentialId : null;
+      let authType: Host['authType'] = fAuthType;
+      if (fAuthType === 'password') {
+        const secret = { type: 'password' as const, password: fPass };
+        const { credential } = await api.createCredential({
+          type: 'password',
+          label: `${hostName} password`,
+          username: fUser,
+          password: fPass,
+          notes: `Created from host ${fUser}@${fHost}:${parseInt(fPort) || 22}`,
+          runtime: window.ipcRenderer ? 'electron' : 'browser',
+        });
+        if (window.ipcRenderer) {
+          await window.ipcRenderer.invoke('identity-save-secret', { userId: session.user.id, id: credential.id, secret });
+        }
+        credentialId = credential.id;
+        authType = 'identity';
+      }
 
       const newHostData: Omit<Host, 'id'> & { removeCredential?: boolean } = {
         name: hostName,
         host: fHost,
         port: parseInt(fPort) || 22,
         username: fUser,
-        authType: fAuthType,
-        credentialId: fAuthType === 'identity' ? fCredentialId : null,
+        authType,
+        credentialId,
         startupDirectory: fStartupDirectory || null,
         notes: fNotes || null,
         tags: fTags || null,
@@ -1335,9 +1357,9 @@ function App() {
               )}
               <div>
                 <label className="block text-xs text-textMuted mb-1">{editingHost ? 'New password' : 'Password'}</label>
-                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Not stored in host record" />
+                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Saved as a host identity" />
                 <div className="mt-2 text-xs text-textMuted leading-5">
-                  Password auth is not auto-promoted to all identities. Use a saved identity if you need persistence.
+                  Passwords are saved as identities and assigned only to this host.
                 </div>
               </div>
               {editingHost?.credentialId && (
