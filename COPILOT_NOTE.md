@@ -59,3 +59,12 @@ Mock SSH integration test
 - Summary: Both graceful and abrupt sessions connected to mock SSH server; session cleanup executed, ephemeral credential clear returned true for both sessions. Metrics show 2 sessions created and closed.
 
 Notes: This validates session lifecycle cleanup and ephemeral credential clearing behavior in a controlled environment. Still recommend running Electron + live host tests to ensure no handshake regressions when private key buffers are cleared.
+
+CI workflow added
+- .github/workflows/ci.yml: runs TypeScript typecheck, ESLint, and mock integration test (scripts/integration/mock-ssh-test.js) on push/PR to main.
+- Added eslint devDependency and minimal .eslintrc.json to allow lint step in CI.
+
+Notes:
+- ESLint configured minimally (eslint:recommended). For TypeScript-specific linting, consider adding @typescript-eslint tooling later.
+
+Committed: ci: add GitHub Actions workflow for tsc, eslint, and mock integration tests
