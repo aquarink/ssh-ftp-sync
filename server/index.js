@@ -188,14 +188,22 @@ async function register(req, res) {
     throw Object.assign(new Error('A valid email is required'), { status: 400 });
   }
 
+  if (!body.agreeLegal) {
+    throw Object.assign(new Error('You must agree to the Terms & Conditions and Privacy Policy'), { status: 400 });
+  }
+
+  if (body.legalVersion !== '2026-05') {
+    throw Object.assign(new Error('Invalid legal agreement version'), { status: 400 });
+  }
+
   const emailCheck = await verifySignupEmail(email);
   const user = { id: randomUUID(), email };
   try {
     await pool.execute(
       `INSERT INTO users
-        (id, email, password_hash, email_check_result, email_safe_to_send, email_checked_at)
-       VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(3))`,
-      [user.id, user.email, await hashPassword(body.password), emailCheck.result, emailCheck.safeToSend]
+        (id, email, password_hash, email_check_result, email_safe_to_send, email_checked_at, legal_accepted_version, legal_accepted_at)
+       VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(3), ?, UTC_TIMESTAMP(3))`,
+      [user.id, user.email, await hashPassword(body.password), emailCheck.result, emailCheck.safeToSend, body.legalVersion]
     );
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
@@ -679,6 +687,11 @@ async function testIdentity(req, res, id) {
   const port = Number.parseInt(body.port, 10) || 22;
   if (!host || !username) throw Object.assign(new Error('Host and username are required'), { status: 400 });
 
+  const targetHost = host ? host.trim().toLowerCase() : '';
+  if (targetHost === '0.0.0.0' || targetHost === '::' || targetHost === '[::]') {
+    throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
+  }
+
   const isLoopback = isLoopbackAddress(host);
   const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true';
   const runtime = String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser';
@@ -1020,9 +1033,13 @@ const server = http.createServer((req, res) => {
 attachSshWebSocket(server);
 
 const apiBindHost = process.env.API_BIND_HOST || '127.0.0.1';
-if (!isLoopbackAddress(apiBindHost) || apiBindHost === '0.0.0.0' || apiBindHost === '::') {
-  console.error("CRITICAL: Listener must bind only to a loopback address (127.0.0.1 or ::1), never 0.0.0.0 or external interfaces.");
-  process.exit(1);
+const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true' || process.env.IS_LOCAL_BRIDGE === 'true';
+
+if (isLocalBridgeEnabled) {
+  if (!isLoopbackAddress(apiBindHost) || apiBindHost === '0.0.0.0' || apiBindHost === '::') {
+    console.error("CRITICAL: Local bridge listener must bind only to a loopback address, never 0.0.0.0 or unspecified/wildcard addresses.");
+    process.exit(1);
+  }
 }
 
 server.listen(port, apiBindHost, () => {

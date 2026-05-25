@@ -460,9 +460,25 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       </main>
 
       <footer className="relative z-10 border-t border-border/80 bg-background/70">
-        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-6 text-xs text-textMuted sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <span>Ant Tech Async</span>
-          <span>Research-guided secure remote operations platform</span>
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6 text-xs text-textMuted sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-1">
+            <span className="font-semibold text-white">Ant Tech Async</span>
+            <span>Research-guided secure remote operations platform</span>
+          </div>
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => onNavigate('/terms')}
+              className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+            >
+              Terms & Conditions
+            </button>
+            <button
+              onClick={() => onNavigate('/privacy')}
+              className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+            >
+              Privacy Policy
+            </button>
+          </div>
         </div>
       </footer>
     </div>

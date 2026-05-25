@@ -4,6 +4,8 @@ import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
 import { TerminalView } from './components/TerminalView';
+import { TermsPage } from './components/TermsPage';
+import { PrivacyPage } from './components/PrivacyPage';
 import { api, Host, ManagedUser, Session, SshCredential } from './lib/api';
 
 type SshTabStatus = 'connecting' | 'connected' | 'error' | 'closed';
@@ -113,6 +115,7 @@ function App() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [nextPassword, setNextPassword] = useState('');
   const [confirmNextPassword, setConfirmNextPassword] = useState('');
+  const [agreeLegal, setAgreeLegal] = useState(false);
 
   // Form states
   const [fName, setFName] = useState('');
@@ -275,7 +278,7 @@ function App() {
       window.history.replaceState({}, '', '/app');
       setRoute('/app');
     }
-    if (!session && route !== '/' && route !== '/login' && route !== '/register') {
+    if (!session && route !== '/' && route !== '/login' && route !== '/register' && route !== '/terms' && route !== '/privacy') {
       window.history.replaceState({}, '', '/');
       setRoute('/');
     }
@@ -461,13 +464,17 @@ function App() {
         if (authPassword !== authConfirmPassword) {
           throw new Error("Passwords do not match");
         }
+        if (!agreeLegal) {
+          throw new Error("You must agree to the Terms & Conditions and Privacy Policy");
+        }
 
-        const { message } = await api.register(emailLower, authPassword, turnstileToken);
+        const { message } = await api.register(emailLower, authPassword, turnstileToken, agreeLegal, '2026-05');
         setAuthMode('login');
         setAuthNotice(message);
         setAuthEmail('');
         setAuthPassword('');
         setAuthConfirmPassword('');
+        setAgreeLegal(false);
       }
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : String(err));
@@ -735,6 +742,13 @@ function App() {
     return 'bg-textMuted';
   };
 
+  if (route === '/terms') {
+    return <TermsPage onNavigate={navigate} session={session} />;
+  }
+  if (route === '/privacy') {
+    return <PrivacyPage onNavigate={navigate} session={session} />;
+  }
+
   if (!session) {
     if (route === '/') {
       return <LandingPage onNavigate={navigate} />;
@@ -797,17 +811,47 @@ function App() {
             </div>
 
             {authMode === 'register' && (
-              <div>
-                <label className="block text-xs font-medium text-textMuted mb-1.5">Confirm Password</label>
-                <input
-                  value={authConfirmPassword}
-                  onChange={e => setAuthConfirmPassword(e.target.value)}
-                  required
-                  type="password"
-                  placeholder="••••••••"
-                  className="w-full bg-background/50 border border-border rounded-lg px-3 py-2 text-sm text-white placeholder-textMuted/50 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all duration-200"
-                />
-              </div>
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-textMuted mb-1.5">Confirm Password</label>
+                  <input
+                    value={authConfirmPassword}
+                    onChange={e => setAuthConfirmPassword(e.target.value)}
+                    required
+                    type="password"
+                    placeholder="••••••••"
+                    className="w-full bg-background/50 border border-border rounded-lg px-3 py-2 text-sm text-white placeholder-textMuted/50 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all duration-200"
+                  />
+                </div>
+                <div className="flex items-start space-x-2 pt-1">
+                  <input
+                    id="agreeLegal"
+                    required
+                    type="checkbox"
+                    checked={agreeLegal}
+                    onChange={e => setAgreeLegal(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-border bg-background text-primary focus:ring-primary focus:ring-opacity-25"
+                  />
+                  <label htmlFor="agreeLegal" className="text-xs text-textMuted leading-relaxed select-none">
+                    I agree to the{' '}
+                    <button
+                      type="button"
+                      onClick={() => navigate('/terms')}
+                      className="text-primary hover:underline font-medium inline bg-transparent p-0 border-none cursor-pointer"
+                    >
+                      Terms & Conditions
+                    </button>{' '}
+                    and{' '}
+                    <button
+                      type="button"
+                      onClick={() => navigate('/privacy')}
+                      className="text-primary hover:underline font-medium inline bg-transparent p-0 border-none cursor-pointer"
+                    >
+                      Privacy Policy
+                    </button>
+                  </label>
+                </div>
+              </>
             )}
 
             {turnstileSiteKey ? (
@@ -858,6 +902,14 @@ function App() {
               {authMode === 'login' ? 'Sign Up' : 'Sign In'}
             </button>
           </div>
+        </div>
+
+        <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-textMuted flex items-center justify-center gap-4 z-10">
+          <button onClick={() => navigate('/')} className="hover:text-white transition cursor-pointer bg-transparent border-none p-0">Home</button>
+          <span>•</span>
+          <button onClick={() => navigate('/terms')} className="hover:text-white transition cursor-pointer bg-transparent border-none p-0">Terms & Conditions</button>
+          <span>•</span>
+          <button onClick={() => navigate('/privacy')} className="hover:text-white transition cursor-pointer bg-transparent border-none p-0">Privacy Policy</button>
         </div>
       </div>
     );
@@ -1416,6 +1468,32 @@ function App() {
                   <button type="submit" className="px-4 py-2 bg-primary text-background text-sm font-medium rounded-md hover:bg-primary/90">Change Password</button>
                 </div>
               </form>
+              <div className="border-t border-border pt-4 mt-5 flex justify-between items-center text-xs text-textMuted">
+                <span>Legal Version: 2026-05</span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAccountOpen(false);
+                      navigate('/terms');
+                    }}
+                    className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+                  >
+                    Terms
+                  </button>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAccountOpen(false);
+                      navigate('/privacy');
+                    }}
+                    className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+                  >
+                    Privacy
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

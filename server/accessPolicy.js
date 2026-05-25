@@ -120,9 +120,7 @@ function isLoopbackAddress(hostStr) {
     h === 'localhost' ||
     h === '127.0.0.1' ||
     h === '::1' ||
-    /^127\.\d+\.\d+\.\d+$/.test(h) ||
-    h === '0.0.0.0' ||
-    h === '::'
+    /^127\.\d+\.\d+\.\d+$/.test(h)
   );
 }
 
@@ -154,6 +152,17 @@ async function authorizeConnectRequest(userId, body = {}) {
   const host = await loadHost(userId, hostId);
 
   // Validate loopback / localhost bridge constraints
+  const targetHost = host.host ? host.host.trim().toLowerCase() : '';
+  if (targetHost === '0.0.0.0' || targetHost === '::' || targetHost === '[::]') {
+    rejectAccess('wildcard_target_denied', {
+      userId,
+      hostId: host.id,
+      runtime,
+      purpose,
+    });
+    throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
+  }
+
   const isLoopback = isLoopbackAddress(host.host);
   const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true';
 

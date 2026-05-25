@@ -150,10 +150,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ identifier, password, turnstileToken }),
     }),
-  register: (email: string, password: string, turnstileToken: string) =>
+  register: (email: string, password: string, turnstileToken: string, agreeLegal?: boolean, legalVersion?: string) =>
     request<{ ok: true; message: string }>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, turnstileToken }),
+      body: JSON.stringify({ email, password, turnstileToken, agreeLegal, legalVersion }),
     }),
   logout: () =>
     request<{ ok: true }>('/api/auth/logout', {
