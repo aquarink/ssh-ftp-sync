@@ -252,7 +252,7 @@ export function TerminalView({
     }
 
     // Listen to data from SSH server
-    const onData = (_: any, data: { id: string, data: string }) => {
+    const onData = (_: unknown, data: { id: string, data: string }) => {
       if (data.id === sessionId && term.current) {
         term.current.write(data.data);
       }

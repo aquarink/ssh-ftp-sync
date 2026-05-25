@@ -353,8 +353,8 @@ function App() {
     try {
       const { hosts } = await api.listHosts();
       setHosts(hosts);
-    } catch (err: any) {
-      console.error('Error fetching hosts:', err.message);
+    } catch (err) {
+      console.error('Error fetching hosts:', err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingHosts(false);
     }
@@ -365,8 +365,8 @@ function App() {
     try {
       const { identities, credentials } = await api.listIdentities();
       setCredentials(identities || credentials);
-    } catch (err: any) {
-      console.error('Error fetching credentials:', err.message);
+    } catch (err) {
+      console.error('Error fetching credentials:', err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -414,15 +414,15 @@ function App() {
   useEffect(() => {
     if (!window.ipcRenderer) return;
 
-    const onConnected = (_: any, { id }: { id: string }) => {
+    const onConnected = (_: unknown, { id }: { id: string }) => {
       setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'connected', errorMsg: '' } : tab));
     };
 
-    const onError = (_: any, { id, message }: { id: string, message: string }) => {
+    const onError = (_: unknown, { id, message }: { id: string, message: string }) => {
       setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'error', errorMsg: message } : tab));
     };
 
-    const onClosed = (_: any, { id }: { id: string }) => {
+    const onClosed = (_: unknown, { id }: { id: string }) => {
       setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'closed', errorMsg: 'SSH connection closed.' } : tab));
     };
 
@@ -469,8 +469,8 @@ function App() {
         setAuthPassword('');
         setAuthConfirmPassword('');
       }
-    } catch (err: any) {
-      setAuthError(err.message);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
     } finally {
       resetTurnstile();
       setAuthLoading(false);
@@ -604,8 +604,8 @@ function App() {
       fetchCredentials();
 
       closeHostModal();
-    } catch (err: any) {
-      alert('Error saving host: ' + err.message);
+    } catch (err) {
+      alert('Error saving host: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -619,8 +619,8 @@ function App() {
       closingTabs.forEach(tab => window.ipcRenderer?.send('ssh-disconnect', { id: tab.id }));
       setSshTabs(tabs => tabs.filter(tab => tab.hostId !== hostId));
       if (closingTabs.some(tab => tab.id === activeTabId)) setActiveTabId(null);
-    } catch (err: any) {
-      alert('Error deleting host: ' + err.message);
+    } catch (err) {
+      alert('Error deleting host: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -629,8 +629,8 @@ function App() {
     try {
       const { users } = await api.listUsers();
       setManagedUsers(users);
-    } catch (err: any) {
-      alert('Error loading users: ' + err.message);
+    } catch (err) {
+      alert('Error loading users: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setUsersLoading(false);
     }
@@ -652,8 +652,8 @@ function App() {
     try {
       const { user } = await api.reviewUser(userId, approvalStatus);
       setManagedUsers(managedUsers.map(item => item.id === user.id ? user : item));
-    } catch (err: any) {
-      alert('Error reviewing user: ' + err.message);
+    } catch (err) {
+      alert('Error reviewing user: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -672,8 +672,8 @@ function App() {
       setNextPassword('');
       setConfirmNextPassword('');
       setAccountNotice('Password updated.');
-    } catch (err: any) {
-      setAccountError(err.message);
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -699,8 +699,8 @@ function App() {
       };
       setSshTabs(tabs => [...tabs, tab]);
       setActiveTabId(tabId);
-    } catch (error: any) {
-      alert(error.message || 'Unable to authorize SSH connect');
+    } catch (error) {
+      alert((error instanceof Error ? error.message : String(error)) || 'Unable to authorize SSH connect');
     }
   };
 
@@ -1319,7 +1319,7 @@ function App() {
               </div>
               <div>
                 <label className="block text-xs text-textMuted mb-1">Authentication</label>
-                <select value={fAuthType} onChange={e => setFAuthType(e.target.value as any)} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
+                <select value={fAuthType} onChange={e => setFAuthType(e.target.value as 'password' | 'identity' | 'one_time')} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
                   <option value="password">Password</option>
                   <option value="identity">Identity / Keychain</option>
                   <option value="one_time" disabled>One-time key (disabled)</option>

@@ -18,10 +18,10 @@ declare global {
   interface Window {
     turnstile?: Turnstile;
     ipcRenderer: {
-      send: (channel: string, data: any) => void;
-      invoke: <T = any>(channel: string, data: any) => Promise<T>;
-      on: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
-      removeListener: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
+      send: (channel: string, data: unknown) => void;
+      invoke: <T = unknown>(channel: string, data: unknown) => Promise<T>;
+      on: (channel: string, listener: (event: unknown, ...args: any[]) => void) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
+      removeListener: (channel: string, listener: (event: unknown, ...args: any[]) => void) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
       removeAllListeners: (channel: string) => void;
     };
   }

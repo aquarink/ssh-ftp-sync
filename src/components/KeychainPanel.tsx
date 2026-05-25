@@ -105,8 +105,8 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
       ]);
       setIdentities(identityResult.identities || identityResult.credentials || []);
       setHosts(hostResult.hosts);
-    } catch (err: any) {
-      setError(err.message || 'Unable to load identities');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Unable to load identities');
     } finally {
       setLoading(false);
     }
@@ -143,8 +143,8 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
       resetForm();
       setNotice('Secret saved securely. Secrets are not displayed after saving.');
       await loadIdentities();
-    } catch (err: any) {
-      setError(err.message || 'Unable to save identity');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Unable to save identity');
     }
   };
 
@@ -166,14 +166,14 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
     setError('');
     try {
       if (window.ipcRenderer) {
-        const result = await window.ipcRenderer.invoke('identity-test', { userId, credentialId: id, host, username, port, authType: identity.type });
+        const result = await window.ipcRenderer.invoke<{ fingerprint?: string }>('identity-test', { userId, credentialId: id, host, username, port, authType: identity.type });
         alert(`Identity test succeeded. ${result?.fingerprint ? `Fingerprint: ${result.fingerprint}` : ''}`.trim());
       } else {
         const result = await api.testIdentity(id, { host, username, port, runtime, authType: identity.type });
         alert(`Identity test succeeded. ${result.fingerprint ? `Fingerprint: ${result.fingerprint}` : ''}`.trim());
       }
-    } catch (err: any) {
-      setError(err.message || 'Identity test failed');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Identity test failed');
     }
   };
 
@@ -187,8 +187,8 @@ export function KeychainPanel({ userId, onHostUpdated }: KeychainPanelProps) {
       onHostUpdated?.(host);
       await loadIdentities();
       alert('Identity assigned to host. Changes apply to new connections. Active SSH tabs keep their current session until reconnect.');
-    } catch (err: any) {
-      setError(err.message || 'Unable to assign identity');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Unable to assign identity');
     }
   };
 

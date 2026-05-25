@@ -1,19 +1,19 @@
 {
   "token": {
-    "issuedMs": 3,
-    "tokenId": "ecd837af-1f17-4045-8189-a48ac57811f5"
+    "issuedMs": 2,
+    "tokenId": "e7fc3f3e-28df-4137-b287-7f93ea960766"
   },
   "sessions": [
     {
-      "id": "test-abrupt-1779672848519",
-      "connectMs": 119,
+      "id": "test-abrupt-1779687095322",
+      "connectMs": 113,
       "cleaned": true,
-      "cleanupMs": 1,
+      "cleanupMs": 0,
       "ephemeralCleared": true
     },
     {
-      "id": "test-grace-1779672848516",
-      "connectMs": 125,
+      "id": "test-grace-1779687095319",
+      "connectMs": 111,
       "cleaned": true,
       "cleanupMs": 0,
       "ephemeralCleared": true

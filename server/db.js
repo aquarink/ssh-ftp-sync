@@ -4,19 +4,27 @@ const { loadEnv } = require('./env');
 loadEnv();
 
 const required = ['MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD'];
-for (const key of required) {
-  if (!process.env[key]) throw new Error(`${key} is required`);
+const hasAllRequired = required.every(key => process.env[key]);
+
+let pool;
+if (hasAllRequired) {
+  pool = mysql.createPool({
+    host: process.env.MYSQL_HOST || 'localhost',
+    port: Number(process.env.MYSQL_PORT || 3306),
+    database: process.env.MYSQL_DATABASE,
+    user: process.env.MYSQL_USER,
+    password: process.env.MYSQL_PASSWORD,
+    waitForConnections: true,
+    connectionLimit: 10,
+    timezone: 'Z',
+  });
+} else {
+  pool = new Proxy({}, {
+    get(target, prop) {
+      throw new Error(`Database connection failed: ${required.filter(k => !process.env[k]).join(', ')} env var(s) required but not set.`);
+    }
+  });
 }
 
-const pool = mysql.createPool({
-  host: process.env.MYSQL_HOST || 'localhost',
-  port: Number(process.env.MYSQL_PORT || 3306),
-  database: process.env.MYSQL_DATABASE,
-  user: process.env.MYSQL_USER,
-  password: process.env.MYSQL_PASSWORD,
-  waitForConnections: true,
-  connectionLimit: 10,
-  timezone: 'Z',
-});
-
 module.exports = { pool };
+

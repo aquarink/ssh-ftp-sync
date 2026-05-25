@@ -102,7 +102,7 @@ export function SftpFileManager({
     };
   }, []);
 
-  const runSftp = async <T,>(operation: string, payload: Record<string, any>): Promise<T> => {
+  const runSftp = async <T,>(operation: string, payload: Record<string, unknown>): Promise<T> => {
     const runtime = window.ipcRenderer ? 'electron' : 'browser';
     const { token } = await api.requestConnectToken({
       hostId,
@@ -143,8 +143,8 @@ export function SftpFileManager({
           scrollContainerRef.current.scrollTop = path === currentPath ? scrollPosition : 0;
         }
       });
-    } catch (err: any) {
-      setError(err.message || 'Unable to list directory');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Unable to list directory');
     } finally {
       setLoading(false);
     }
@@ -161,7 +161,7 @@ export function SftpFileManager({
     }
   }, [scrollPosition, currentPath, entries.length]);
 
-  const operate = async (label: string, operation: string, payload: Record<string, any>, reload = true) => {
+  const operate = async (label: string, operation: string, payload: Record<string, unknown>, reload = true) => {
     setError('');
     setNotice('');
     try {
@@ -169,8 +169,8 @@ export function SftpFileManager({
       if (!mountedRef.current) return;
       setNotice(label);
       if (reload) await refresh();
-    } catch (err: any) {
-      setError(err.message || 'SFTP operation failed');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'SFTP operation failed');
     }
   };
 
@@ -220,8 +220,8 @@ export function SftpFileManager({
       if (!mountedRef.current) return;
       setEditorPath(selected.path);
       setEditorValue(result.content);
-    } catch (err: any) {
-      setError(err.message || 'Unable to read file');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Unable to read file');
     }
   };
 
@@ -238,7 +238,7 @@ export function SftpFileManager({
     try {
       for (let index = 0; index < files.length; index += 1) {
         const file = files[index];
-        const relativePath = (file as any).webkitRelativePath || file.name;
+        const relativePath = (file as unknown as { webkitRelativePath?: string }).webkitRelativePath || file.name;
         await runSftp('upload', { path: joinPath(currentPath, relativePath), data: await fileToBase64(file) });
         if (!mountedRef.current) return;
         setProgress({ label: `Uploading ${file.name}`, value: Math.round(((index + 1) / files.length) * 100) });
@@ -246,8 +246,8 @@ export function SftpFileManager({
       if (!mountedRef.current) return;
       setNotice('Upload complete');
       await refresh();
-    } catch (err: any) {
-      setError(err.message || 'Upload failed');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Upload failed');
     } finally {
       setProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -261,8 +261,8 @@ export function SftpFileManager({
       const result = await runSftp<{ name: string; data: string }>('download', { path: selected.path });
       if (!mountedRef.current) return;
       downloadBase64(result.name, result.data);
-    } catch (err: any) {
-      setError(err.message || 'Download failed');
+    } catch (err) {
+      setError((err instanceof Error ? err.message : String(err)) || 'Download failed');
     } finally {
       setProgress(null);
     }
@@ -287,8 +287,8 @@ export function SftpFileManager({
       if (a.isDirectory && !b.isDirectory) return -1;
       if (!a.isDirectory && b.isDirectory) return 1;
 
-      let valA: any = a[sortBy];
-      let valB: any = b[sortBy];
+      let valA: string | number = a[sortBy];
+      let valB: string | number = b[sortBy];
 
       if (sortBy === 'name') {
         valA = a.name.toLowerCase();

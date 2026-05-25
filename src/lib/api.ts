@@ -248,7 +248,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  sftpOperation: <T = any>(hostId: string, operation: string, payload: Record<string, any>) =>
+  sftpOperation: <T = unknown>(hostId: string, operation: string, payload: Record<string, unknown>) =>
     request<T>(`/api/hosts/${encodeURIComponent(hostId)}/sftp/${encodeURIComponent(operation)}`, {
       method: 'POST',
       body: JSON.stringify(payload),
