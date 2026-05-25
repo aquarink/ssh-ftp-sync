@@ -22,6 +22,9 @@
 - [/] Verify no secret material appears in console output, API responses, localStorage, or plaintext DB fields. *(API responses verified via metadata-only tests; console/localStorage/DB requires live deployment audit)*
 - [x] Verify legacy password-host records migrate to scoped identities where still required. *(Covered by legacy password fallback tests!)*
 - [x] Implement and run automated unit tests for SFTP path validation, join, and mutable remote path checks. *(Covered by sftpPathValidation tests!)*
+- [ ] Set up an in-memory mock SSH/SFTP server on localhost for automated end-to-end integration testing.
+- [ ] Verify end-to-end connection flow, session cleanup lifecycle, and zero-trust token consumption against the local mock SSH server.
+
 
 > [!NOTE]
 > Added 23 new server-side unit tests in `server/__tests__/identityResolver.test.js` to cover security, scoped selection, legacy fallback, and error paths.

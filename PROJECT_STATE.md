@@ -342,6 +342,7 @@ This project is being prepared for open source development.
 - Terminal memory and cleanup audits.
 - [x] Automated tests for auth, host ownership, and identity ownership (implemented and passing!).
 - [x] SFTP path validation automated tests (implemented and passing!).
+- [ ] End-to-end integration tests using an in-memory mock SSH server (localhost) to verify connection resolution, session cleanup lifecycle, and zero-trust token enforcement.
 
 ## Research Scope
 
