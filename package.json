@@ -11,6 +11,8 @@
     "desktop": "vite & sleep 3 && NODE_ENV=development electron .",
     "build": "tsc && vite build && electron-builder",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "jest",
+    "test:watch": "jest --watch",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -31,9 +33,24 @@
     "autoprefixer": "^10.4.16",
     "electron": "^26.0.0",
     "electron-builder": "^24.6.4",
+    "jest": "^29.7.0",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.5",
     "typescript": "^5.0.2",
     "vite": "^4.4.5"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/*.test.js"],
+    "collectCoverageFrom": [
+      "server/**/*.js",
+      "electron/**/*.js",
+      "!server/index.js",
+      "!electron/main.js"
+    ],
+    "coveragePathIgnorePatterns": [
+      "/node_modules/",
+      "test.js"
+    ]
   }
 }
