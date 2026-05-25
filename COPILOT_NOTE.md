@@ -51,3 +51,11 @@ Next steps recommended:
 2. Run Electron integration locally (requires GUI environment). I can provide exact steps.
 3. Install eslint (dev dependency) or run lint in CI where dependencies are installed.
 
+
+Mock SSH integration test
+- Date: 2026-05-25
+- Script: scripts/integration/mock-ssh-test.js
+- Report: scripts/integration/mock-ssh-report.json
+- Summary: Both graceful and abrupt sessions connected to mock SSH server; session cleanup executed, ephemeral credential clear returned true for both sessions. Metrics show 2 sessions created and closed.
+
+Notes: This validates session lifecycle cleanup and ephemeral credential clearing behavior in a controlled environment. Still recommend running Electron + live host tests to ensure no handshake regressions when private key buffers are cleared.
