@@ -1,6 +1,11 @@
 const net = require('net');
-const { isLoopbackAddress } = require('./accessPolicy');
+const { createHash } = require('crypto');
+const { isLoopbackAddress, isUnspecifiedAddress } = require('./accessPolicy');
 const { logAccessEvent } = require('./securityLog');
+
+function sessionLogId(token) {
+  return createHash('sha256').update(String(token)).digest('hex').slice(0, 16);
+}
 
 class LocalBridgeSessionManager {
   constructor() {
@@ -8,11 +13,17 @@ class LocalBridgeSessionManager {
   }
 
   createSession(token, targetHost, targetPort, options = {}) {
+    if (!token) {
+      throw new Error('Local bridge session requires a scoped token');
+    }
+
     const host = String(targetHost || '').trim().toLowerCase();
     const port = Number(targetPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error('Local bridge target port must be a valid TCP port');
+    }
 
-    // 1. Loopback checks (must reject unspecified/wildcard addresses and non-loopback addresses)
-    if (host === '0.0.0.0' || host === '::' || host === '[::]') {
+    if (isUnspecifiedAddress(host)) {
       throw new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed');
     }
 
@@ -20,16 +31,16 @@ class LocalBridgeSessionManager {
       throw new Error('Local bridge is restricted to loopback targets only');
     }
 
-    // 2. Short TTL (default to 30 seconds)
     const ttlMs = options.ttlMs || 30_000;
 
-    // Clean up existing session if any
     if (this.sessions.has(token)) {
       this.cleanupSession(token);
     }
 
+    const logId = sessionLogId(token);
     const session = {
       token,
+      logId,
       targetHost: host,
       targetPort: port,
       sockets: new Set(),
@@ -37,18 +48,16 @@ class LocalBridgeSessionManager {
       localPort: null,
     };
 
-    // 3. Loopback-only listener (listen on 127.0.0.1 or ::1)
     const bindHost = options.bindHost || '127.0.0.1';
-    if (!isLoopbackAddress(bindHost) || bindHost === '0.0.0.0' || bindHost === '::') {
+    if (isUnspecifiedAddress(bindHost) || !isLoopbackAddress(bindHost)) {
       throw new Error('Local bridge listener must bind only to a loopback address');
     }
 
     const server = net.createServer((localSocket) => {
       session.sockets.add(localSocket);
 
-      // Metadata-only log
       logAccessEvent('bridge_connection_attempt', {
-        token: token.substring(0, 8) + '...',
+        bridgeSessionId: logId,
         targetHost: host,
         targetPort: port,
         timestamp: new Date().toISOString()
@@ -69,10 +78,10 @@ class LocalBridgeSessionManager {
 
       localSocket.on('close', cleanupSockets);
       remoteSocket.on('close', cleanupSockets);
-      localSocket.on('error', (err) => {
+      localSocket.on('error', () => {
         cleanupSockets();
       });
-      remoteSocket.on('error', (err) => {
+      remoteSocket.on('error', () => {
         cleanupSockets();
       });
     });
@@ -82,7 +91,7 @@ class LocalBridgeSessionManager {
     // Timeout-based TTL cleanup
     session.ttlTimer = setTimeout(() => {
       logAccessEvent('bridge_session_ttl_expired', {
-        token: token.substring(0, 8) + '...',
+        bridgeSessionId: logId,
         targetHost: host,
         targetPort: port,
         timestamp: new Date().toISOString()
@@ -96,7 +105,7 @@ class LocalBridgeSessionManager {
       server.listen(0, bindHost, () => {
         session.localPort = server.address().port;
         logAccessEvent('bridge_session_created', {
-          token: token.substring(0, 8) + '...',
+          bridgeSessionId: logId,
           targetHost: host,
           targetPort: port,
           localPort: session.localPort,
@@ -106,7 +115,7 @@ class LocalBridgeSessionManager {
       });
 
       server.on('error', (err) => {
-        clearTimeout(session.ttlTimer);
+        this.cleanupSession(token);
         reject(err);
       });
     });
@@ -118,7 +127,6 @@ class LocalBridgeSessionManager {
 
     clearTimeout(session.ttlTimer);
 
-    // Close all sockets
     for (const socket of session.sockets) {
       try {
         socket.destroy();
@@ -126,7 +134,6 @@ class LocalBridgeSessionManager {
     }
     session.sockets.clear();
 
-    // Close listener
     if (session.listener) {
       try {
         session.listener.close();
@@ -136,7 +143,7 @@ class LocalBridgeSessionManager {
     this.sessions.delete(token);
 
     logAccessEvent('bridge_session_cleaned_up', {
-      token: token.substring(0, 8) + '...',
+      bridgeSessionId: session.logId,
       targetHost: session.targetHost,
       targetPort: session.targetPort,
       timestamp: new Date().toISOString()

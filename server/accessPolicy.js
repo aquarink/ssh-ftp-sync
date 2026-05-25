@@ -124,6 +124,32 @@ function isLoopbackAddress(hostStr) {
   );
 }
 
+function isUnspecifiedAddress(hostStr) {
+  if (!hostStr) return false;
+  const h = hostStr.trim().toLowerCase();
+  return h === '0.0.0.0' || h === '::' || h === '[::]';
+}
+
+function isLocalBridgeRuntimeEnabled(env = process.env) {
+  return env.ENABLE_LOCALHOST_BRIDGE === 'true' || env.IS_LOCAL_BRIDGE === 'true';
+}
+
+function validateApiBindHost(apiBindHost, env = process.env) {
+  if (!isLocalBridgeRuntimeEnabled(env)) {
+    return { ok: true, enforced: false };
+  }
+
+  if (!apiBindHost || isUnspecifiedAddress(apiBindHost) || !isLoopbackAddress(apiBindHost)) {
+    return {
+      ok: false,
+      enforced: true,
+      reason: 'Local bridge listener must bind only to a loopback address',
+    };
+  }
+
+  return { ok: true, enforced: true };
+}
+
 async function authorizeConnectRequest(userId, body = {}) {
   const request = validateConnectTokenRequest(body);
   const runtime = request.runtime;
@@ -152,8 +178,7 @@ async function authorizeConnectRequest(userId, body = {}) {
   const host = await loadHost(userId, hostId);
 
   // Validate loopback / localhost bridge constraints
-  const targetHost = host.host ? host.host.trim().toLowerCase() : '';
-  if (targetHost === '0.0.0.0' || targetHost === '::' || targetHost === '[::]') {
+  if (isUnspecifiedAddress(host.host)) {
     rejectAccess('wildcard_target_denied', {
       userId,
       hostId: host.id,
@@ -263,5 +288,8 @@ module.exports = {
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
+  isLocalBridgeRuntimeEnabled,
   isLoopbackAddress,
+  isUnspecifiedAddress,
+  validateApiBindHost,
 };

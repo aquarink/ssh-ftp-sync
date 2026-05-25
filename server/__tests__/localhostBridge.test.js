@@ -1,4 +1,9 @@
-const { authorizeConnectRequest, isLoopbackAddress } = require('../accessPolicy');
+const {
+  authorizeConnectRequest,
+  isLoopbackAddress,
+  isUnspecifiedAddress,
+  validateApiBindHost,
+} = require('../accessPolicy');
 const { pool } = require('../db');
 const { issueConnectToken } = require('../connectToken');
 const { LocalBridgeSessionManager } = require('../localBridge');
@@ -38,13 +43,21 @@ describe('Localhost Bridge POC Security Policy', () => {
     });
 
     test('identifies non-loopback hostnames and IPs', () => {
-      expect(isLoopbackAddress('0.0.0.0')).toBe(false); // CRITICAL: unspecified/wildcard is NOT loopback
-      expect(isLoopbackAddress('::')).toBe(false);      // CRITICAL: unspecified/wildcard is NOT loopback
+      expect(isLoopbackAddress('0.0.0.0')).toBe(false);
+      expect(isLoopbackAddress('::')).toBe(false);
       expect(isLoopbackAddress('example.com')).toBe(false);
       expect(isLoopbackAddress('192.168.1.1')).toBe(false);
       expect(isLoopbackAddress('8.8.8.8')).toBe(false);
       expect(isLoopbackAddress(null)).toBe(false);
       expect(isLoopbackAddress(undefined)).toBe(false);
+    });
+
+    test('identifies unspecified / wildcard addresses separately from loopback', () => {
+      expect(isUnspecifiedAddress('0.0.0.0')).toBe(true);
+      expect(isUnspecifiedAddress('::')).toBe(true);
+      expect(isUnspecifiedAddress('[::]')).toBe(true);
+      expect(isUnspecifiedAddress('127.0.0.1')).toBe(false);
+      expect(isUnspecifiedAddress('::1')).toBe(false);
     });
   });
 
@@ -212,6 +225,36 @@ describe('Localhost Bridge POC Security Policy', () => {
       // Wait for TTL expiration
       await new Promise((resolve) => setTimeout(resolve, 80));
       expect(manager.sessions.has('test-token-valid')).toBe(false);
+    });
+  });
+
+  describe('API bind policy', () => {
+    test('does not force production API bind host to loopback when local bridge is disabled', () => {
+      expect(validateApiBindHost('0.0.0.0', { ENABLE_LOCALHOST_BRIDGE: 'false' })).toEqual({
+        ok: true,
+        enforced: false,
+      });
+      expect(validateApiBindHost('10.0.0.5', {})).toEqual({
+        ok: true,
+        enforced: false,
+      });
+    });
+
+    test('rejects wildcard and external bind hosts for local bridge runtime', () => {
+      expect(validateApiBindHost('0.0.0.0', { ENABLE_LOCALHOST_BRIDGE: 'true' }).ok).toBe(false);
+      expect(validateApiBindHost('::', { ENABLE_LOCALHOST_BRIDGE: 'true' }).ok).toBe(false);
+      expect(validateApiBindHost('10.0.0.5', { IS_LOCAL_BRIDGE: 'true' }).ok).toBe(false);
+    });
+
+    test('allows loopback bind hosts for local bridge runtime', () => {
+      expect(validateApiBindHost('127.0.0.1', { ENABLE_LOCALHOST_BRIDGE: 'true' })).toEqual({
+        ok: true,
+        enforced: true,
+      });
+      expect(validateApiBindHost('::1', { IS_LOCAL_BRIDGE: 'true' })).toEqual({
+        ok: true,
+        enforced: true,
+      });
     });
   });
 });

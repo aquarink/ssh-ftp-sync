@@ -118,7 +118,7 @@ export function TermsPage({ onNavigate, session }: TermsPageProps) {
                 Future releases may introduce experimental zero-trust overlay networking, VPN orchestration (such as WireGuard or Tailscale), or localhost reverse tunnels. 
               </p>
               <p>
-                You acknowledge that using the Local Secure Bridge to connect to localhost (127.0.0.1) requires explicit local daemon execution on your client machine. The local bridge is strictly restricted to loopback-only destinations when active to prevent open-proxy vulnerabilities.
+                You acknowledge that localhost access is currently governed by an access policy gate and experimental local bridge runtime proof-of-concept. It is not a full production Local Secure Bridge daemon. When active, bridge listeners and destinations are restricted to loopback-only addresses to prevent open-proxy vulnerabilities.
               </p>
             </section>
 

@@ -12,24 +12,31 @@
 - Verification:
   - Confirmed all 125 Jest tests pass, and verified the build executes successfully.
 
-## [2026-05-25] - Phase 4 - Localhost Bridge Proof-of-Concept
+## [2026-05-25] - Phase 4 - Localhost Access Policy Gate and Bridge Runtime POC
 
-- Objective: Implement an early Phase 4 proof-of-concept for localhost/loopback connectivity using a Local Secure Bridge model, ensuring secure localhost routing while preserving Phase 1 security boundaries.
+- Objective: Implement an early Phase 4 access policy gate for localhost/loopback connectivity, then add a minimal local bridge runtime abstraction without claiming a full production Local Secure Bridge daemon.
 - Implementation summary:
-  - Added `isLoopbackAddress` helper function to validate loopback targets (`localhost`, `127.0.0.1`, `::1`, etc.).
+  - Added `isLoopbackAddress` helper function to validate loopback targets (`localhost`, `127.0.0.1`, `::1`, and `127.0.0.0/8`).
+  - Added explicit unspecified-address handling so `0.0.0.0`, `::`, and `[::]` are never treated as loopback and are rejected as connection targets.
   - Configured `ENABLE_LOCALHOST_BRIDGE` feature flag inside access policy and connection handlers.
   - Hardened connection gateways (`authorizeConnectRequest` and `testIdentity` in backend) to block loopback targets in remote browser relay mode, and restrict local bridge mode to loopback-only connections.
-  - Added strict loopback validations in Electron main process (`electron/sshHandler.js`) for `ssh-connect` and `identity-test` IPC handlers.
-  - Enforced loopback-only binding on API/bridge listener (blocks `0.0.0.0` or external network bindings).
-  - Wrote a comprehensive unit test suite in `server/__tests__/localhostBridge.test.js` covering loopback detection and access rules.
+  - Added strict target validations in Electron main process (`electron/sshHandler.js`) for `ssh-connect` and `identity-test` IPC handlers.
+  - Split production API binding from local bridge binding: production API bind behavior remains deployment-controlled, while local bridge runtime mode enforces loopback-only bind hosts.
+  - Added `LocalBridgeSessionManager` as a minimal bridge runtime abstraction with a loopback-only listener, token-scoped session map, short TTL, deterministic cleanup, and metadata-only logs.
+  - Wrote a unit test suite in `server/__tests__/localhostBridge.test.js` covering loopback detection, wildcard rejection, bridge bind rules, runtime TTL cleanup, and production API bind compatibility.
 - Security decision:
   - Keep browser runtime separated from direct localhost access.
   - Block remote server relay from connecting to local loopback (SSRF protection).
+  - Always reject wildcard/unspecified connection targets (`0.0.0.0` and `::`) because they are bind/wildcard addresses, not destinations.
   - Restrict the local bridge to loopback targets only when enabled, avoiding open proxy vulnerabilities.
+  - Do not force the normal production backend API to bind to loopback; reverse-proxy deployments may still bind according to their deployment topology.
   - Preserve single-consumption connect token validation, ephemeral credential cleanup, and metadata-only logging.
+- Current classification:
+  - This is now an access policy gate plus a minimal local bridge runtime abstraction POC.
+  - It is not yet a full production Local Secure Bridge daemon because there is no dedicated supervised client process, installer, update channel, OS service integration, or authenticated control-plane lifecycle.
 - Acceptance test result:
-  - Successfully built and packaged the hybrid application (`npm run build`).
-  - Added 6 new tests to the test suite, with all 123 tests passing successfully.
+  - `npm run test` passed with 132 tests across 9 suites.
+  - `npm run build` completed successfully (`tsc`, Vite production build, and electron-builder).
 
 ## [2026-05-24] - Phase 1.1 - Smart Identity Engine
 
@@ -248,4 +255,3 @@
 
 ### Technical Debt
 - **Duplicated SQL Query Logic**: `loadHost` is separately defined and implemented in `server/connectToken.js` and `server/identityResolver.js` with slightly different alias bindings (`userId` vs `user_id`). These should be unified into a shared database model layer.
-

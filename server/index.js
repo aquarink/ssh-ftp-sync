@@ -27,6 +27,8 @@ const {
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
   isLoopbackAddress,
+  isUnspecifiedAddress,
+  validateApiBindHost,
 } = require('./accessPolicy');
 const { getSecurityMetrics } = require('./securityMetrics');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
@@ -687,8 +689,7 @@ async function testIdentity(req, res, id) {
   const port = Number.parseInt(body.port, 10) || 22;
   if (!host || !username) throw Object.assign(new Error('Host and username are required'), { status: 400 });
 
-  const targetHost = host ? host.trim().toLowerCase() : '';
-  if (targetHost === '0.0.0.0' || targetHost === '::' || targetHost === '[::]') {
+  if (isUnspecifiedAddress(host)) {
     throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
   }
 
@@ -1033,13 +1034,11 @@ const server = http.createServer((req, res) => {
 attachSshWebSocket(server);
 
 const apiBindHost = process.env.API_BIND_HOST || '127.0.0.1';
-const isLocalBridgeEnabled = process.env.ENABLE_LOCALHOST_BRIDGE === 'true' || process.env.IS_LOCAL_BRIDGE === 'true';
+const apiBindValidation = validateApiBindHost(apiBindHost);
 
-if (isLocalBridgeEnabled) {
-  if (!isLoopbackAddress(apiBindHost) || apiBindHost === '0.0.0.0' || apiBindHost === '::') {
-    console.error("CRITICAL: Local bridge listener must bind only to a loopback address, never 0.0.0.0 or unspecified/wildcard addresses.");
-    process.exit(1);
-  }
+if (!apiBindValidation.ok) {
+  console.error("CRITICAL: Local bridge listener must bind only to a loopback address, never 0.0.0.0 or unspecified/wildcard addresses.");
+  process.exit(1);
 }
 
 server.listen(port, apiBindHost, () => {

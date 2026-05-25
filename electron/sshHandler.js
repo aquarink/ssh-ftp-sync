@@ -1,7 +1,7 @@
 const { BrowserWindow, ipcMain, session } = require('electron');
 const { Client } = require('ssh2');
 const { runSftpOperation } = require('../server/sftpService');
-const { isLoopbackAddress } = require('../server/accessPolicy');
+const { isLoopbackAddress, isUnspecifiedAddress } = require('../server/accessPolicy');
 const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
 const { TerminalSessionManager } = require('./terminalSessionManager');
 const { resolveIdentity } = require('./identityResolver');
@@ -161,6 +161,9 @@ ipcMain.on('ssh-connect', (event, payload) => {
     let authorization = null;
     let resolved = null;
     try {
+      if (isUnspecifiedAddress(host)) {
+        throw new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets');
+      }
       if (process.env.ENABLE_LOCALHOST_BRIDGE === 'true' && !isLoopbackAddress(host)) {
         throw new Error('Local bridge is restricted to loopback targets only');
       }
@@ -266,6 +269,9 @@ ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
 });
 
 ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, credentialId, authType, host, port, username }) => {
+  if (isUnspecifiedAddress(host)) {
+    throw new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets');
+  }
   if (process.env.ENABLE_LOCALHOST_BRIDGE === 'true' && !isLoopbackAddress(host)) {
     throw new Error('Local bridge is restricted to loopback targets only');
   }
