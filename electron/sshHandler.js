@@ -134,7 +134,7 @@ ipcMain.on('ssh-connect', (event, payload) => {
         credentialId: credentialId || null,
         connectToken,
       });
-      resolved = resolveIdentity({
+      resolved = await resolveIdentity({
         userId: effectiveUserId,
         authenticatedUserId: activeUserId,
         hostId,
@@ -220,7 +220,7 @@ ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
 });
 
 ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, credentialId, authType, host, port, username }) => {
-  const resolved = resolveIdentity({
+  const resolved = await resolveIdentity({
     userId,
     authenticatedUserId: activeUserId,
     hostId,
@@ -334,7 +334,7 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
       credentialId: session.credentialId || null,
       connectToken: payload?.connectToken,
     });
-    resolved = resolveIdentity({
+    resolved = await resolveIdentity({
       userId: session.userId,
       authenticatedUserId: activeUserId,
       hostId: session.hostId,
