@@ -340,7 +340,8 @@ This project is being prepared for open source development.
 - Agent compatibility for Linux/macOS `SSH_AUTH_SOCK`, Windows OpenSSH agent, and Pageant.
 - Performance optimization for many terminal sessions.
 - Terminal memory and cleanup audits.
-- Automated tests for auth, host ownership, identity ownership, and SFTP path validation.
+- [x] Automated tests for auth, host ownership, and identity ownership (implemented and passing!).
+- [ ] SFTP path validation automated tests.
 
 ## Research Scope
 
