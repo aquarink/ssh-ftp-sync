@@ -296,7 +296,8 @@ Security work is an active research area in this project.
 - Secure storage strategy:
   - Server/browser mode uses encrypted vault files and metadata references.
   - Electron mode uses `safeStorage`; a future abstraction may support `keytar` or platform-specific providers.
-  - SSH agent support should use `SSH_AUTH_SOCK` on Linux/macOS and Pageant/OpenSSH-compatible flows on Windows.
+  - OS ssh-agent support is optional compatibility mode only and must remain disabled by default. `ENABLE_OS_SSH_AGENT=true` must not be used in production unless the operator explicitly accepts the risk of delegating authentication to the host OS agent.
+  - `SSH_AUTH_SOCK` must be ignored unless `ENABLE_OS_SSH_AGENT=true`.
 - No plaintext secret policy:
   - Private keys, passphrases, passwords, and certificate private material should not be logged, returned from APIs, stored in `localStorage`, or stored as plaintext in MySQL.
   - Existing legacy host password behavior is being migrated toward identity/vault-backed storage.
@@ -337,7 +338,7 @@ This project is being prepared for open source development.
 - Electron/browser compatibility matrix.
 - Windows/Linux/macOS testing.
 - SSH certificate compatibility with `ssh2`.
-- Agent compatibility for Linux/macOS `SSH_AUTH_SOCK`, Windows OpenSSH agent, and Pageant.
+- Agent compatibility for Linux/macOS `SSH_AUTH_SOCK`, Windows OpenSSH agent, and Pageant remains optional and explicitly opt-in only.
 - Performance optimization for many terminal sessions.
 - Terminal memory and cleanup audits.
 - [x] Automated tests for auth, host ownership, and identity ownership (implemented and passing!).
@@ -682,4 +683,3 @@ As part of the completion of Phase 1, a comprehensive security review and implem
 1. **[x] Priority 1: Electron Renderer Context Hardening** (Completed: Checked sender session cookies dynamically with backend).
 2. **[x] Priority 2: Plaintext Host Password Deprecation** (Completed: Migrated all legacy host passwords and dropped the password column).
 3. **Priority 3: Native Memory Wiping Exploration**: Integrate a native C++ addon (like node-sodium or a custom native helper) for Electron/server runtimes to allocate secure, non-pageable memory for private keys, ensuring absolute zero-fill on disposal.
-

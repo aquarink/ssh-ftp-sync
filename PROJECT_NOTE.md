@@ -1,16 +1,33 @@
 ## [2026-05-25] - Standalone SSH/SFTP Runtime Audit & Hardening
 
 - Objective: Make Ant Tech Async a fully standalone SSH/SFTP runtime independent of OS-level OpenSSH tooling (CLI, agent, keys, known_hosts, etc.).
-- Audit & Security Hardening:
+- Resolver changes:
+  - `server/identityResolver.js`: hardened `agent` identity resolution so browser runtime rejects agent use and all OS ssh-agent use requires explicit `ENABLE_OS_SSH_AGENT=true`.
+  - `electron/identityResolver.js`: applied the same explicit opt-in requirement for desktop agent identities.
+- Audit and security hardening:
   - Audited the codebase to ensure zero usage of `child_process` (`spawn`, `exec`), `execa`, or local OpenSSH CLI files.
   - Implemented explicit opt-in logic for OS-level `ssh-agent` integration via the `ENABLE_OS_SSH_AGENT=true` environment variable. By default, any attempt to resolve an `agent`-based identity is rejected.
   - Enforced that the application does not automatically scan, list, or load keys from the local user's directory (`~/.ssh` or equivalent).
-- Spawning Guard Implementation:
-  - Implemented an automated guard test suite in `server/__tests__/sshSpawningGuard.test.js` to scan the codebase for forbidden execution patterns, ensuring `child_process` spawning or `.ssh` home directory file path building is not introduced.
+- Production safety note:
+  - `ENABLE_OS_SSH_AGENT` must default to false/disabled.
+  - OS ssh-agent support is optional compatibility mode only.
+  - Production deployments must not enable `ENABLE_OS_SSH_AGENT=true` unless the operator explicitly accepts the risk of delegating authentication to the host OS agent.
+- Spawning guard implementation:
+  - Added `server/__tests__/sshSpawningGuard.test.js` to scan application code for forbidden execution patterns and automatic `.ssh` path access.
+  - Confirmed it is included in the normal Jest workflow because `npm run test` matches `**/*.test.js`.
+  - CI must block merges when this guard fails.
 - Documentation:
-  - Added documentation to `README.md` clarifying that the application runs as a fully standalone library-based SSH runtime.
+  - Added documentation to `README.md` clarifying standalone runtime requirements, production ssh-agent policy, CI merge-blocking expectations, and manual verification steps.
+- Manual verification checklist:
+  - [ ] Test on a clean machine/container without OpenSSH CLI installed.
+  - [ ] Verify SSH terminal connections work.
+  - [ ] Verify SFTP operations work.
+  - [ ] Verify no process named `ssh`, `scp`, or `sftp` is spawned.
+  - [ ] Verify `~/.ssh` is not read automatically.
+  - [ ] Verify `SSH_AUTH_SOCK` is ignored unless `ENABLE_OS_SSH_AGENT=true`.
 - Verification:
-  - Confirmed all 125 Jest tests pass, and verified the build executes successfully.
+  - `npm run test` passed with 132 tests across 9 suites.
+  - The normal test run included `server/__tests__/sshSpawningGuard.test.js`.
 
 ## [2026-05-25] - Phase 4 - Localhost Access Policy Gate and Bridge Runtime POC
 

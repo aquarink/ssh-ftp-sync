@@ -22,6 +22,26 @@ Ant Tech Async is a playful working name for async remote operations. It is not 
 - A Node.js backend is part of the project. It is not a separate external service.
 - **Fully standalone**: Ant Tech Async uses an embedded/library SSH runtime and does not require OpenSSH CLI, ssh-agent, ssh-add, or system scp/sftp binaries on the user machine.
 
+## Standalone Runtime Safety
+
+The SSH/SFTP runtime must remain independent from OS-level OpenSSH tooling.
+
+- SSH and SFTP connections use the application runtime and `ssh2`; they must not spawn `ssh`, `scp`, `sftp`, `ssh-add`, or other OpenSSH CLI processes.
+- `npm run test` runs `server/__tests__/sshSpawningGuard.test.js` by default. CI must block merges if this guard fails.
+- `ENABLE_OS_SSH_AGENT` defaults to disabled. OS `ssh-agent` support is optional compatibility mode only.
+- Production deployments must not enable `ENABLE_OS_SSH_AGENT=true` unless the operator explicitly accepts the risk of delegating authentication to the host OS agent.
+- The application must not automatically scan, list, or load `~/.ssh`; identities must be explicitly saved or assigned through the app.
+- `SSH_AUTH_SOCK` must be ignored unless `ENABLE_OS_SSH_AGENT=true`.
+
+Manual verification checklist before treating a release as standalone-runtime ready:
+
+- [ ] Test on a clean machine/container without OpenSSH CLI installed.
+- [ ] Verify SSH terminal connections work.
+- [ ] Verify SFTP operations work.
+- [ ] Verify no process named `ssh`, `scp`, or `sftp` is spawned during terminal or SFTP use.
+- [ ] Verify `~/.ssh` is not read automatically.
+- [ ] Verify `SSH_AUTH_SOCK` is ignored unless `ENABLE_OS_SSH_AGENT=true`.
+
 ## How It Works
 
 1. The React frontend in `src/` renders the landing page, auth screens, host manager, terminal UI, and file manager.
