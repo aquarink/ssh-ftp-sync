@@ -651,3 +651,37 @@ Research basis by title:
 - ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF
 - Towards SSH3: how HTTP/3 improves secure shells
 - Emerging research areas in SIP-based converged services for extended Web clients
+
+## Phase 1 Security Audit & Remaining Tasks (2026-05-25)
+
+As part of the completion of Phase 1, a comprehensive security review and implementation audit was conducted. Below are the key findings, security risks, technical debt, and remaining next steps.
+
+### Missing / Unchecked
+- [ ] End-to-end live target verification against actual remote SSH/SFTP targets (outside localhost).
+- [ ] Persistent identity migration CLI/script to backfill legacy password-based hosts into the secure identity model.
+- [ ] Electron Renderer validation: Hardening the Electron renderer process boundary (renderer-supplied `userId` remains advisory and needs main-process side validations).
+- [ ] SFTP path validation automated tests for nested subdirectory creation limits (mkdir/rmdir bounds).
+
+### Security Risks
+1. **CRITICAL: Electron Renderer Context Trust Boundary Vulnerability**
+   - **Why:** The Electron resolver (`electron/identityResolver.js`) receives the user context (`userId`) from the renderer process via IPC. If the renderer process is compromised (e.g., via XSS or a malicious dependency), an attacker could forge the `userId` to resolve credentials belonging to another user.
+   - **Which Phase & Principle:** Phase 1.1 (Smart Identity Engine) / Trust-Boundary Preservation.
+   - **Impact:** Allows cross-user credential access on compromised desktop environments.
+2. **WARNING: Best-Effort Memory Cleaning in V8 Engine**
+   - **Why:** JavaScript string primitives cannot be reliably overwritten in memory due to how the V8 engine handles immutable strings and garbage collection. Although `clearSecretMaterial` clears Buffer contents using `buffer.fill(0)`, keys read as strings (e.g. from environment or decrypted vault payloads before being wrapped in buffers) may linger in memory.
+   - **Which Phase & Principle:** Phase 1.3 (Key Isolation) / Ephemeral Credential Lifecycle.
+   - **Impact:** Risk of memory dump attacks extracting plaintext keys or passwords.
+3. **WARNING: Legacy Plaintext Host Password Migration Debt**
+   - **Why:** The database schema still supports legacy `password` fields directly in the `hosts` table. Although new hosts are pushed to use the scoped identities model, existing records or old code paths might fall back to reading host passwords, exposing plaintext credentials in the SQL database.
+   - **Which Phase & Principle:** Phase 1.2 (Secure Vault) / No Plaintext Secret Policy.
+   - **Impact:** Risk of sql-injection attacks leaking remote credentials directly.
+
+### Architecture Drift
+- **WARNING: SQL Schema Discrepancy (user_id vs userId)**
+  - There is a minor naming discrepancy between `server/connectToken.js` (which queries `user_id AS userId`) and `server/identityResolver.js` (which queries `user_id` directly without alias). This requires the host database mocks and query parsers to handle two naming formats.
+
+### Recommended Next Tasks
+1. **Priority 1: Electron Renderer Context Hardening**: Modify `electron/sshHandler.js` and `electron/main.js` to derive user authentication context strictly from main-process session stores, rather than trusting the renderer's `userId` argument.
+2. **Priority 2: Plaintext Host Password Deprecation**: Write and run a migration script that moves all legacy `hosts.password` records into vault-secured `ssh_credentials` rows, then drop the legacy password column from the schema.
+3. **Priority 3: Native Memory Wiping Exploration**: Integrate a native C++ addon (like node-sodium or a custom native helper) for Electron/server runtimes to allocate secure, non-pageable memory for private keys, ensuring absolute zero-fill on disposal.
+
