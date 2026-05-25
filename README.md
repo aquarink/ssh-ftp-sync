@@ -185,7 +185,14 @@ For production-style browser deployment:
 3. Proxy `/api/` and `/api/ssh` to the Node API process.
 4. Run migrations before deploying backend changes.
 5. Start the API with your preferred process manager, init system, or service manager.
-6. Use strong secrets and a secure vault key.
+6. Use strong secrets and a secure vault key:
+   - **Vault Key Setup**: Since the legacy host password storage has been deprecated, the API process **requires** `CREDENTIAL_VAULT_KEY` or `SESSION_SECRET` to be defined in `.env` (or in the system environment) to encrypt/decrypt host secrets.
+   - **Permissions**: The `.credential-vault` directory must be owned by the user running the Node API process (e.g. `nginx:nginx`) with `700` (`drwx------`) permissions, and the credential JSON files inside it must have `600` (`-rw-------`) permissions. If migrations were executed as `root`, ensure to adjust ownership and permissions using:
+     ```bash
+     chown -R nginx:nginx .credential-vault
+     chmod 700 .credential-vault
+     chmod 600 .credential-vault/*
+     ```
 
 Examples of how the API can be kept running:
 
