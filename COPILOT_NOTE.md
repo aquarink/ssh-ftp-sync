@@ -84,3 +84,11 @@ Planned feature branches (no branches created yet)
 - infra/ci-mock-integration -> CI + lint + mock integration commits: e51addf, f787a59, bad4d76
 
 These branches will be used to group Phase 1 work and avoid direct commits to main. Each small fix or enhancement should be committed to its corresponding branch. When ready, open PRs from these branches to main for review and CI verification.
+
+Local branches created: 2026-05-25T01:46:32Z
+
+ - phase1/01-smart-identity-engine
+ - phase1/02-secure-vault
+ - phase1/03-key-isolation
+ - phase1/04-session-cleanup
+ - phase1/05-zero-trust-access
