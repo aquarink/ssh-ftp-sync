@@ -74,3 +74,13 @@ Additional changes implemented:
 - Enhanced mock integration test to assert report contents and fail CI on regressions.
 - Added scripts/logs/parse_identity_logs.js to summarize vault/identity events from logs.
 - Added GitHub PR template and CHANGELOG.md.
+
+Planned feature branches (no branches created yet)
+- phase1/01-smart-identity-engine -> related commits: 37f9178, 54cdd59
+- phase1/02-secure-vault -> related commit: 429b318
+- phase1/03-key-isolation -> related commit: a1ca857
+- phase1/04-session-cleanup -> related commit: d75df68
+- phase1/05-zero-trust-access -> related commit: bcdb6b1
+- infra/ci-mock-integration -> CI + lint + mock integration commits: e51addf, f787a59, bad4d76
+
+These branches will be used to group Phase 1 work and avoid direct commits to main. Each small fix or enhancement should be committed to its corresponding branch. When ready, open PRs from these branches to main for review and CI verification.
