@@ -21,11 +21,12 @@
 - [x] Attempt cross-user `credentialId` and `hostId` access and confirm rejection. *(Covered by resolver ownership validation tests!)*
 - [/] Verify no secret material appears in console output, API responses, localStorage, or plaintext DB fields. *(API responses verified via metadata-only tests; console/localStorage/DB requires live deployment audit)*
 - [x] Verify legacy password-host records migrate to scoped identities where still required. *(Covered by legacy password fallback tests!)*
-- [ ] Implement and run automated unit tests for SFTP path validation, join, and mutable remote path checks.
-
+- [x] Implement and run automated unit tests for SFTP path validation, join, and mutable remote path checks. *(Covered by sftpPathValidation tests!)*
 
 > [!NOTE]
-> Added 23 new server-side unit tests in `server/__tests__/identityResolver.test.js` to cover security, scoped selection, legacy fallback, and error paths. Merged the documentation and tests from `phase1/01-smart-identity-engine` into `phase1/05-zero-trust-access` so that all implementation files are present. All 105 tests are now passing successfully!
+> Added 23 new server-side unit tests in `server/__tests__/identityResolver.test.js` to cover security, scoped selection, legacy fallback, and error paths.
+> Added 11 new path validation unit tests in `server/__tests__/sftpPathValidation.test.js` to verify path normalization, null byte checking, path traversal blocking, join operation safety, and mutable root checks. Also fixed a bug in `server/sftpService.js` where the path traversal check was bypassable because path normalization occurred before checking for `..` segments.
+> Merged the documentation and tests from `phase1/01-smart-identity-engine` into `phase1/05-zero-trust-access` so that all implementation files are present. All 116 tests are now passing successfully!
 
 
 ## Security TODO

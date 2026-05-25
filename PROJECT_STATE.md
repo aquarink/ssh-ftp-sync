@@ -341,7 +341,7 @@ This project is being prepared for open source development.
 - Performance optimization for many terminal sessions.
 - Terminal memory and cleanup audits.
 - [x] Automated tests for auth, host ownership, and identity ownership (implemented and passing!).
-- [ ] SFTP path validation automated tests.
+- [x] SFTP path validation automated tests (implemented and passing!).
 
 ## Research Scope
 
