@@ -172,3 +172,50 @@
 - Acceptance test result: build/typecheck and live SSH verification were not yet re-run at the time of this note; live target availability remains required for full end-to-end confirmation.
 - Known limitations: this is a lightweight access layer rather than a full SDP/ZTNA platform, browser/Electron policy remains metadata-driven, and live target validation still depends on configured SSH hosts.
 - Future recommendations: SDP gateway, federated identity, adaptive policy, eBPF observability, distributed access control, and tighter lifecycle coupling for future session handoff workflows.
+
+## [2026-05-25] - Comprehensive Phase 1 Audit & Review Report
+
+### Completed
+- [x] Host-bound identity enforcement (Smart Identity Engine, Phase 1.1)
+- [x] Separate Browser/Electron resolvers (Smart Identity Engine, Phase 1.1)
+- [x] Metadata-only API responses for credentials & redacted security logging (Secure Vault, Phase 1.2)
+- [x] Separation of Browser and Electron vault boundaries (Secure Vault, Phase 1.2)
+- [x] In-place memory clearing (`clearSecretMaterial`) and cloning helpers (Key Isolation, Phase 1.3)
+- [x] Ephemeral credential wrapper with short TTL (Key Isolation, Phase 1.3)
+- [x] Centralized session lifecycle tracking and sweeper (Session Cleanup, Phase 1.4)
+- [x] Scoped connect-token validation & single-consumption mechanics (Zero-Trust Access, Phase 1.5)
+- [x] Automated unit and E2E integration tests (with localhost mock SSH/SFTP server) (Testing & Verification, Phase 1.5)
+
+### Missing / Unchecked
+- [ ] End-to-end live target verification against actual remote SSH/SFTP targets (outside localhost).
+- [ ] Persistent identity migration CLI to backfill legacy password-based hosts into the secure identity model.
+- [ ] Electron Renderer validation: Hardening the Electron renderer process boundary (renderer-supplied `userId` remains advisory and needs main-process side validations).
+- [ ] SFTP path validation automated tests for nested subdirectory creation limits (mkdir/rmdir bounds).
+
+### Security Risks
+1. **CRITICAL: Electron Renderer Context Trust Boundary Vulnerability**
+   - **Why:** The Electron resolver (`electron/identityResolver.js`) receives the user context (`userId`) from the renderer process via IPC. If the renderer process is compromised (e.g., via XSS in preview tabs or a malicious package dependency), an attacker could forge the `userId` to resolve credentials belonging to another user.
+   - **Which Phase & Principle:** Phase 1.1 (Smart Identity Engine) / Trust-Boundary Preservation.
+   - **Impact:** Allows cross-user credential access on compromised desktop environments.
+2. **WARNING: Best-Effort Memory Cleaning in V8 Engine**
+   - **Why:** JavaScript string primitives cannot be reliably overwritten in memory due to how the V8 engine handles immutable strings and garbage collection. Although `clearSecretMaterial` clears Buffer contents using `buffer.fill(0)`, keys read as strings (e.g. from environment or decrypted vault payloads before being wrapped in buffers) may linger in memory.
+   - **Which Phase & Principle:** Phase 1.3 (Key Isolation) / Ephemeral Credential Lifecycle.
+   - **Impact:** Risk of memory dump attacks extracting plaintext keys or passwords.
+3. **WARNING: Legacy Plaintext Host Password Migration Debt**
+   - **Why:** The database schema still supports legacy `password` fields directly in the `hosts` table. Although new hosts are pushed to use the scoped identities model, existing records or old code paths might fall back to reading host passwords, exposing plaintext credentials in the SQL database.
+   - **Which Phase & Principle:** Phase 1.2 (Secure Vault) / No Plaintext Secret Policy.
+   - **Impact:** Risk of sql-injection attacks leaking remote credentials directly.
+
+### Architecture Drift
+- **WARNING: SQL Schema Discrepancy (user_id vs userId)**
+  - There is a minor naming discrepancy between `server/connectToken.js` (which queries `user_id AS userId`) and `server/identityResolver.js` (which queries `user_id` directly without alias). This requires the host database mocks and query parsers to handle two naming formats, which could lead to developer errors or object reference issues during future refactors. Affects Phase 1.1 / 1.5.
+
+### Recommended Next Tasks
+1. **Priority 1: Electron Renderer Context Hardening**: Modify `electron/sshHandler.js` and `electron/main.js` to derive user authentication context strictly from main-process session stores, rather than trusting the renderer's `userId` argument.
+2. **Priority 2: Plaintext Host Password Deprecation**: Write and run a migration script that moves all legacy `hosts.password` records into vault-secured `ssh_credentials` rows, then drop the legacy password column from the schema.
+3. **Priority 3: Native Memory Wiping Exploration**: Integrate a native C++ addon (like node-sodium or a custom native helper) for Electron/server runtimes to allocate secure, non-pageable memory for private keys, ensuring absolute zero-fill on disposal.
+
+### Technical Debt
+- **Legacy Password Column**: The `hosts` table schema still retains the `password` field for backwards compatibility.
+- **Duplicated SQL Query Logic**: `loadHost` is separately defined and implemented in `server/connectToken.js` and `server/identityResolver.js` with slightly different alias bindings (`userId` vs `user_id`). These should be unified into a shared database model layer.
+
