@@ -33,16 +33,24 @@ async function migrate() {
     const [applied] = await connection.query('SELECT name FROM schema_migrations');
     const appliedNames = new Set(applied.map((migration) => migration.name));
     const migrations = fs.readdirSync(migrationsPath)
-      .filter((file) => file.endsWith('.sql'))
+      .filter((file) => file.endsWith('.sql') || file.endsWith('.js'))
       .sort();
 
     for (const migration of migrations) {
       if (appliedNames.has(migration)) continue;
 
-      const sql = fs.readFileSync(path.join(migrationsPath, migration), 'utf8');
       await connection.beginTransaction();
       try {
-        await connection.query(sql);
+        if (migration.endsWith('.sql')) {
+          const sql = fs.readFileSync(path.join(migrationsPath, migration), 'utf8');
+          await connection.query(sql);
+        } else if (migration.endsWith('.js')) {
+          const migrationModule = require(path.join(migrationsPath, migration));
+          if (typeof migrationModule.up !== 'function') {
+            throw new Error(`Migration ${migration} does not export an 'up' function`);
+          }
+          await migrationModule.up(connection);
+        }
         await connection.query('INSERT INTO schema_migrations (name) VALUES (?)', [migration]);
         await connection.commit();
         console.log(`Applied ${migration}.`);

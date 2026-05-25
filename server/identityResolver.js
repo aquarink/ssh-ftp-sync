@@ -60,7 +60,7 @@ function normalizeHostAuthType(authType) {
 async function loadHost(userId, hostId) {
   if (!hostId) return null;
   const [rows] = await pool.execute(
-    `SELECT id, user_id, name, host, port, username, password, auth_type, credential_id, startup_directory, notes, tags
+    `SELECT id, user_id, name, host, port, username, auth_type, credential_id, startup_directory, notes, tags
        FROM hosts
       WHERE id = ?
       LIMIT 1`,
@@ -156,37 +156,6 @@ async function resolveIdentity({
   }
 
   if (!selectedCredentialId) {
-    if (normalizeHostAuthType(host?.auth_type) === 'password' && typeof host.password === 'string' && host.password) {
-      const ephemeralCredential = createEphemeralCredential({
-        sessionId,
-        hostId: host?.id || null,
-        userId,
-        runtime: normalizedRuntime,
-        purpose,
-        authType: 'password',
-        material: { password: host.password },
-      });
-      host.password = '';
-      logIdentityEvent('credentialResolved', {
-        userId,
-        hostId: host?.id || null,
-        credentialId: ephemeralCredential.id,
-        sessionId: ephemeralCredential.sessionId,
-        authType: 'password',
-        runtime: normalizedRuntime,
-        purpose,
-        result: 'ok',
-        timestamp: new Date().toISOString(),
-      });
-      return {
-        host,
-        credential: null,
-        authType: 'password',
-        runtime: normalizedRuntime,
-        purpose,
-        ephemeralCredential,
-      };
-    }
     if (normalizedAuthType === 'password') {
       logIdentityEvent('resolve-missing-credential', {
         userId,
@@ -218,9 +187,6 @@ async function resolveIdentity({
       authType: normalizedAuthType || credential.type,
       material,
     });
-    if (host) {
-      host.password = '';
-    }
 
     logIdentityEvent('credentialResolved', {
       userId,

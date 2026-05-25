@@ -179,37 +179,12 @@ describe('server/identityResolver - Security & Behavior Tests', () => {
     });
   });
 
-  describe('Legacy Password Fallback', () => {
-    test('resolves host password if host auth_type is password and has password stored', async () => {
+  describe('No Assigned Credential Behavior', () => {
+    test('throws 400 if requested authType is password but no credential is assigned', async () => {
       const mockHost = {
         id: 100,
         user_id: 1,
         auth_type: 'password',
-        password: 'legacy-host-password',
-        credential_id: null,
-      };
-      pool.execute.mockResolvedValueOnce([[mockHost]]);
-
-      const result = await resolveIdentity({
-        userId: 1,
-        hostId: 100,
-        runtime: 'browser',
-      });
-
-      expect(result.host.id).toBe(100);
-      expect(result.credential).toBeNull();
-      expect(result.authType).toBe('password');
-      expect(result.runtime).toBe('browser');
-      expect(result.ephemeralCredential.material).toEqual({ password: 'legacy-host-password' });
-      expect(logIdentityEvent).toHaveBeenCalledWith('credentialResolved', expect.any(Object));
-    });
-
-    test('throws 400 if requested authType is password but no credential or host password available', async () => {
-      const mockHost = {
-        id: 100,
-        user_id: 1,
-        auth_type: 'password',
-        password: null, // No password
         credential_id: null,
       };
       pool.execute.mockResolvedValueOnce([[mockHost]]);

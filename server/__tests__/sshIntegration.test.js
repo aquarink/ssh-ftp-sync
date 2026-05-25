@@ -11,6 +11,11 @@ jest.mock('../db', () => ({
   },
 }));
 
+jest.mock('../credentialStore', () => ({
+  readCredentialSecret: jest.fn(() => ({ password: 'testpass' })),
+  clearSecretMaterial: jest.fn(),
+}));
+
 jest.mock('../securityLog', () => ({
   logIdentityEvent: jest.fn(),
   logAccessEvent: jest.fn(),
@@ -140,9 +145,19 @@ describe('SSH/SFTP E2E Integration & Stress Tests', () => {
           username: 'testuser',
           auth_type: 'password',
           authType: 'password',
-          password: 'testpass',
-          credential_id: null,
-          credentialId: null,
+          credential_id: 'mock-cred-123',
+          credentialId: 'mock-cred-123',
+        }]]);
+      }
+      if (query.includes('FROM ssh_credentials')) {
+        return Promise.resolve([[{
+          id: 'mock-cred-123',
+          user_id: userId,
+          userId,
+          type: 'password',
+          label: 'Mock Credential',
+          username: 'testuser',
+          storage_ref: 'mock-storage-ref',
         }]]);
       }
       return Promise.resolve([[]]);
@@ -221,9 +236,19 @@ describe('SSH/SFTP E2E Integration & Stress Tests', () => {
           username: 'testuser',
           auth_type: 'password',
           authType: 'password',
-          password: 'testpass',
-          credential_id: null,
-          credentialId: null,
+          credential_id: 'mock-cred-123',
+          credentialId: 'mock-cred-123',
+        }]]);
+      }
+      if (query.includes('FROM ssh_credentials')) {
+        return Promise.resolve([[{
+          id: 'mock-cred-123',
+          user_id: userId,
+          userId,
+          type: 'password',
+          label: 'Mock Credential',
+          username: 'testuser',
+          storage_ref: 'mock-storage-ref',
         }]]);
       }
       return Promise.resolve([[]]);

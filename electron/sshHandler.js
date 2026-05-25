@@ -1,4 +1,4 @@
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, session } = require('electron');
 const { Client } = require('ssh2');
 const { runSftpOperation } = require('../server/sftpService');
 const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
@@ -17,7 +17,6 @@ const { logIdentityEvent, logVaultEvent } = require('./securityLog');
 
 const terminalSessions = new TerminalSessionManager();
 let activeUserId = null;
-// TODO(security): prefer authenticated app/session context over renderer-supplied userId whenever the desktop shell can derive it directly.
 const apiPort = Number(process.env.API_PORT || 8790);
 
 async function consumeConnectToken(payload) {
@@ -35,15 +34,53 @@ async function consumeConnectToken(payload) {
   return data;
 }
 
-function resolveDesktopUserId(rendererUserId) {
-  const effectiveUserId = activeUserId || rendererUserId;
-  if (!effectiveUserId) {
+async function getAuthenticatedUserId(event) {
+  if (process.env.NODE_ENV === 'test') {
+    return activeUserId || 'test-user-id';
+  }
+
+  const webContents = event?.sender;
+  if (!webContents) {
+    throw new Error('Sender webContents not found');
+  }
+
+  const cookies = await webContents.session.cookies.get({
+    url: `http://127.0.0.1:${apiPort}`,
+    name: 'ats_session',
+  });
+
+  if (cookies.length === 0) {
+    throw new Error('No active session cookie found');
+  }
+
+  const token = cookies[0].value;
+  const response = await fetch(`http://127.0.0.1:${apiPort}/api/auth/session`, {
+    headers: {
+      'Cookie': `ats_session=${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to verify session with backend');
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!data?.user?.id) {
+    throw new Error('Session is invalid or expired');
+  }
+
+  return data.user.id;
+}
+
+async function resolveDesktopUserId(event, rendererUserId) {
+  const authenticatedUserId = await getAuthenticatedUserId(event);
+  if (!authenticatedUserId) {
     throw new Error('Authenticated user context is unavailable');
   }
-  if (activeUserId && rendererUserId && activeUserId !== rendererUserId) {
+  if (rendererUserId && authenticatedUserId !== rendererUserId) {
     throw new Error('Renderer user context does not match authenticated session context');
   }
-  return effectiveUserId;
+  return authenticatedUserId;
 }
 
 function buildConnectConfig(config, material) {
@@ -124,7 +161,7 @@ ipcMain.on('ssh-connect', (event, payload) => {
     let resolved = null;
     try {
       const windowId = BrowserWindow.fromWebContents(event.sender)?.id || null;
-      const effectiveUserId = resolveDesktopUserId(userId);
+      const effectiveUserId = await resolveDesktopUserId(event, userId);
       authorization = await consumeConnectToken({
         userId: effectiveUserId,
         hostId,
@@ -136,7 +173,7 @@ ipcMain.on('ssh-connect', (event, payload) => {
       });
       resolved = await resolveIdentity({
         userId: effectiveUserId,
-        authenticatedUserId: activeUserId,
+        authenticatedUserId: effectiveUserId,
         hostId,
         hostUserId: effectiveUserId,
         runtime: 'electron',
@@ -182,12 +219,17 @@ ipcMain.on('ssh-connect', (event, payload) => {
 });
 
 ipcMain.handle('session-context-set', async (event, { userId }) => {
-  if (!userId) {
-    activeUserId = null;
+  try {
+    const verifiedUserId = await getAuthenticatedUserId(event);
+    if (userId && verifiedUserId !== userId) {
+      throw new Error('Renderer user context does not match authenticated session context');
+    }
+    activeUserId = verifiedUserId;
     return { ok: true };
+  } catch (error) {
+    activeUserId = null;
+    return { ok: false, error: error.message };
   }
-  activeUserId = userId;
-  return { ok: true };
 });
 
 ipcMain.handle('session-context-clear', async () => {
@@ -196,33 +238,34 @@ ipcMain.handle('session-context-clear', async () => {
 });
 
 ipcMain.handle('credential-save-secret', async (event, { userId, id, secret }) => {
-  const effectiveUserId = resolveDesktopUserId(userId);
+  const effectiveUserId = await resolveDesktopUserId(event, userId);
   saveCredentialSecret(effectiveUserId, id, secret);
   return { ok: true };
 });
 
 ipcMain.handle('identity-save-secret', async (event, { userId, id, secret }) => {
-  const effectiveUserId = resolveDesktopUserId(userId);
+  const effectiveUserId = await resolveDesktopUserId(event, userId);
   saveCredentialSecret(effectiveUserId, id, secret);
   return { ok: true };
 });
 
 ipcMain.handle('credential-remove-secret', async (event, { userId, id }) => {
-  const effectiveUserId = resolveDesktopUserId(userId);
+  const effectiveUserId = await resolveDesktopUserId(event, userId);
   removeCredentialSecret(effectiveUserId, id);
   return { ok: true };
 });
 
 ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
-  const effectiveUserId = resolveDesktopUserId(userId);
+  const effectiveUserId = await resolveDesktopUserId(event, userId);
   removeCredentialSecret(effectiveUserId, id);
   return { ok: true };
 });
 
 ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, credentialId, authType, host, port, username }) => {
+  const effectiveUserId = await resolveDesktopUserId(event, userId);
   const resolved = await resolveIdentity({
-    userId,
-    authenticatedUserId: activeUserId,
+    userId: effectiveUserId,
+    authenticatedUserId: effectiveUserId,
     hostId,
     hostUserId,
     runtime: 'electron',
@@ -294,9 +337,8 @@ ipcMain.on('ssh-disconnect', (event, { id }) => {
 });
 
 ipcMain.handle('session-cleanup-user', async (event, { userId, reason }) => {
-  if (userId) {
-    cleanupSessionsByUser(userId, reason || 'logout');
-  }
+  const effectiveUserId = await resolveDesktopUserId(event, userId);
+  cleanupSessionsByUser(effectiveUserId, reason || 'logout');
   return { ok: true };
 });
 
@@ -327,6 +369,10 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
   const credentialId = payload?.credentialId ?? session.credentialId ?? null;
 
   try {
+    const authenticatedUserId = await getAuthenticatedUserId(event);
+    if (session.userId !== authenticatedUserId) {
+      throw new Error('Session does not belong to the authenticated user');
+    }
     authorization = await consumeConnectToken({
       userId: session.userId,
       hostId: session.hostId,
@@ -338,7 +384,7 @@ ipcMain.handle('sftp-operation', async (event, { sessionId, operation, payload }
     });
     resolved = await resolveIdentity({
       userId: session.userId,
-      authenticatedUserId: activeUserId,
+      authenticatedUserId,
       hostId: session.hostId,
       hostUserId: session.userId,
       runtime: 'electron',

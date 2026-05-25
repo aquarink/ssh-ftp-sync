@@ -81,7 +81,6 @@ function hostPayload(body) {
   const username = String(body.username || '').trim();
   const name = String(body.name || host).trim();
   const port = Number.parseInt(body.port, 10) || 22;
-  const password = typeof body.password === 'string' ? body.password : '';
   const authType = ['password', 'private_key', 'private_key_passphrase', 'key_with_certificate', 'certificate', 'agent', 'one_time', 'identity', 'credential'].includes(body.authType)
     ? body.authType
     : 'password';
@@ -99,11 +98,11 @@ function hostPayload(body) {
   if (authType === 'one_time') {
     throw Object.assign(new Error('Authentication method is not supported yet'), { status: 400 });
   }
-  if (authType !== 'password' && authType !== 'one_time' && !credentialId) {
+  if (authType !== 'one_time' && !credentialId) {
     throw Object.assign(new Error('Credential is required for the selected authentication method'), { status: 400 });
   }
 
-  return { host, username, name, port, password, authType, credentialId, startupDirectory, notes, tags };
+  return { host, username, name, port, authType, credentialId, startupDirectory, notes, tags };
 }
 
 function publicUser(user) {
@@ -333,13 +332,12 @@ async function createHost(req, res) {
   const host = { id: randomUUID(), ...hostPayload(await readJson(req)) };
   await ensureUserCredential(user.id, host.credentialId);
   host.userId = user.id;
-  host.password = '';
 
   await pool.execute(
     `INSERT INTO hosts
-      (id, user_id, name, host, port, username, auth_type, credential_id, startup_directory, notes, tags, password)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [host.id, user.id, host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags, host.password]
+      (id, user_id, name, host, port, username, auth_type, credential_id, startup_directory, notes, tags)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [host.id, user.id, host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags]
   );
   json(res, 201, { host: publicHost({
     ...host,
@@ -382,8 +380,7 @@ async function updateHost(req, res, id) {
             credential_id = ?,
             startup_directory = ?,
             notes = ?,
-            tags = ?,
-            password = ''
+            tags = ?
       WHERE id = ? AND user_id = ?`,
     [host.name, host.host, host.port, host.username, host.authType, host.credentialId, host.startupDirectory, host.notes, host.tags, id, user.id]
   );
@@ -602,7 +599,7 @@ async function assignIdentityToHost(req, res, hostId) {
     await ensureUserCredential(user.id, identityId);
   }
   await pool.execute(
-    'UPDATE hosts SET auth_type = ?, credential_id = ?, password = \'\' WHERE id = ? AND user_id = ?',
+    'UPDATE hosts SET auth_type = ?, credential_id = ? WHERE id = ? AND user_id = ?',
     [authType, identityId, hostId, user.id]
   );
   invalidateConnectAuthorizationsByHost(user.id, hostId, 'host_identity_changed');
