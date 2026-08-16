@@ -135,6 +135,25 @@ const researchTitles = [
   'ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF',
 ] as const;
 
+const phase4Highlights = [
+  {
+    title: 'Browser Relay Guard',
+    detail: 'Blocks localhost and private-LAN targets from remote backend context.',
+  },
+  {
+    title: 'Electron Local Reachability',
+    detail: 'Supports localhost, VM IP, LAN private IP, and VPN-reachable targets from user laptop.',
+  },
+  {
+    title: 'Wildcard Target Rejection',
+    detail: 'Rejects 0.0.0.0 and :: as invalid connection targets in all runtimes.',
+  },
+  {
+    title: 'Approved Local Bridge',
+    detail: 'Explicit approval, scoped short-lived session, deterministic cleanup, metadata-only logs.',
+  },
+] as const;
+
 export function LandingPage({ onNavigate }: LandingPageProps) {
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-background text-textMain selection:bg-primary/30 selection:text-white">
@@ -445,6 +464,17 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
               the hosted backend server. Local and VPN-private connections are supported through Electron runtime and
               approved local bridge sessions with scoped short-lived authorization.
             </p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {phase4Highlights.map(({ title, detail }) => (
+                <div
+                  key={title}
+                  className="rounded-xl border border-primary/20 bg-background/40 px-4 py-3"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/85">{title}</div>
+                  <p className="mt-2 text-xs leading-6 text-textMuted sm:text-sm">{detail}</p>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="rounded-[32px] border border-primary/20 bg-gradient-to-r from-primary/10 via-surface/80 to-background/70 p-6 sm:p-8">
