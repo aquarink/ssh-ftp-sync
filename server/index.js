@@ -42,7 +42,7 @@ const {
 } = require('./credentialStore');
 
 const port = Number(process.env.API_PORT || 8790);
-const maxBodyBytes = 50 * 1024 * 1024;
+const maxBodyBytes = 1024 * 1024 * 1024;
 
 function json(res, status, payload, headers = {}) {
   res.writeHead(status, {
