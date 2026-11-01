@@ -6,6 +6,9 @@ const metrics = {
   reusedToken: 0,
   runtimePolicyDenied: 0,
   unauthorizedConnect: 0,
+  deviceAuthStarted: 0,
+  deviceAuthApproved: 0,
+  deviceAuthRejected: 0,
 };
 
 function incrementMetric(name, amount = 1) {

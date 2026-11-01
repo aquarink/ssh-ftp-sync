@@ -20,7 +20,7 @@ Run these on VM 105 (reachable over WireGuard `10.88.0.12` or campus LAN `172.20
 cd /var/nginx/ssh-ftp-sync
 git pull origin main                 # fast-forward to the merged main (947f32b or later)
 npm install                          # lockfile changed (eslint/test deps)
-npm run migrate                      # applies 009_user_legal_consent.sql (from Phase 4)
+npm run migrate                      # applies 009 (legal consent) and 010 (device authorizations, sessions.client)
 npx vite build                       # regenerate dist/ for Caddy
 ```
 
@@ -53,6 +53,8 @@ All have safe defaults in code; set them in `.env` on the VM only to override.
 | `WS_KEEPALIVE_INTERVAL_MS` | `25000` | Relay ping interval |
 | `WS_MAX_MISSED_PONGS` | `2` | Missed pongs before a dead peer is dropped |
 | `CONNECT_*_LIMIT_*` | raised in Phase 4 | Connect-token / attempt rate limits (comfortably fit the 6-attempt reconnect budget) |
+| `DESKTOP_SESSION_DAYS` | `SESSION_DAYS` (30) | Lifetime of a session minted through the desktop device login |
+| `APP_PUBLIC_ORIGIN` | request origin | Where `/device` lives; only needed when the SPA and API are on different origins (dev: `http://localhost:5173`) |
 
 ## Verify after deploy
 
@@ -106,3 +108,12 @@ Override with `ATA_API_ORIGIN=https://…` in the desktop app's environment; in
 `NODE_ENV=development` it uses the local API on `API_PORT`. The relay change that
 lets the desktop runtime fall back to the relay (`runtime=electron`) lives in
 `server/sshWebSocket.js`, so a server restart is part of this release too.
+
+## Desktop device login (server side, Phase 2.6)
+
+Migration `010_device_authorizations.sql` adds the `device_authorizations` table and
+`sessions.client / device_label / last_seen_at`. **`npm run migrate` is required** for
+this release; the API fails on `/api/auth/device/*` and on every login until it runs
+(`createSession` now writes `sessions.client`). Routes: `POST /api/auth/device/start`,
+`/poll`, `/approve`, `/deny`, `GET /api/auth/device?code=`, `GET /api/auth/sessions`,
+`DELETE /api/auth/sessions/:id`. Design: `docs/DESKTOP_DEVICE_LOGIN_DESIGN.md`.

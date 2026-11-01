@@ -4,6 +4,7 @@ const { Client } = require('ssh2');
 const { pool } = require('./db');
 const {
   createSession,
+  currentSessionTokenHash,
   destroySession,
   expiredSessionCookieHeader,
   getSessionUser,
@@ -14,6 +15,8 @@ const {
 const { verifySignupEmail } = require('./emailVerification');
 const { validateRegisterLegalConsent } = require('./legalPolicy');
 const { validateTurnstile } = require('./turnstile');
+const { createDeviceAuth } = require('./deviceAuth');
+const { createMysqlDeviceAuthStore } = require('./deviceAuthStore');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
 const { resolveIdentity } = require('./identityResolver');
@@ -42,6 +45,11 @@ const {
 } = require('./credentialStore');
 
 const port = Number(process.env.API_PORT || 8790);
+
+// Desktop sign-in without a Turnstile widget: device authorization flow
+// (docs/DESKTOP_DEVICE_LOGIN_DESIGN.md). Stale rows are swept every minute.
+const deviceAuth = createDeviceAuth({ store: createMysqlDeviceAuthStore(pool), createSession });
+setInterval(() => deviceAuth.sweep().catch(() => {}), 60_000).unref?.();
 const maxBodyBytes = 1024 * 1024 * 1024;
 
 function json(res, status, payload, headers = {}) {
@@ -921,6 +929,44 @@ async function route(req, res) {
     return json(res, 200, { ok: true }, { 'Set-Cookie': expiredSessionCookieHeader(req) });
   }
   if (req.method === 'PUT' && url.pathname === '/api/auth/password') return changePassword(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/auth/device/start') {
+    return json(res, 201, await deviceAuth.start(req, await readJson(req)));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/auth/device/poll') {
+    const result = await deviceAuth.poll(req, await readJson(req));
+    if (result.sessionToken) {
+      return json(res, 200, { ...result.body, user: publicUser(result.user) }, {
+        'Set-Cookie': sessionCookieHeader(result.sessionToken, req),
+      });
+    }
+    return json(res, result.status, result.body);
+  }
+  if (req.method === 'GET' && url.pathname === '/api/auth/device') {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    return json(res, 200, await deviceAuth.describe(req, user, url.searchParams.get('code')));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/auth/device/approve') {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    return json(res, 200, await deviceAuth.approve(req, user, await readJson(req)));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/auth/device/deny') {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    return json(res, 200, await deviceAuth.deny(req, user, await readJson(req)));
+  }
+  if (req.method === 'GET' && url.pathname === '/api/auth/sessions') {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    return json(res, 200, { sessions: await deviceAuth.listSessions(user, currentSessionTokenHash(req)) });
+  }
+  const sessionId = url.pathname.match(/^\/api\/auth\/sessions\/([^/]+)$/);
+  if (req.method === 'DELETE' && sessionId) {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    return json(res, 200, await deviceAuth.revokeSession(user, decodeURIComponent(sessionId[1]), currentSessionTokenHash(req)));
+  }
   if (req.method === 'GET' && url.pathname === '/api/hosts') return listHosts(req, res);
   if (req.method === 'POST' && url.pathname === '/api/hosts') return createHost(req, res);
   if (req.method === 'GET' && (url.pathname === '/api/credentials' || url.pathname === '/api/identities')) return listIdentities(req, res);

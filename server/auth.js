@@ -66,17 +66,25 @@ async function verifyPassword(password, storedHash) {
   return expected.length === derived.length && timingSafeEqual(expected, derived);
 }
 
-async function createSession(userId) {
+// `client` distinguishes a browser session ('web') from one minted for the
+// desktop runtime through the device authorization flow ('desktop'), so the
+// user can tell them apart and revoke a lost laptop (see deviceAuth.js).
+async function createSession(userId, { client = 'web', deviceLabel = null, days = sessionDays } = {}) {
   const token = randomBytes(32).toString('base64url');
   const tokenHash = hashSessionToken(token);
-  const expiresAt = new Date(Date.now() + sessionDays * 86400 * 1000);
+  const expiresAt = new Date(Date.now() + days * 86400 * 1000);
 
   await pool.execute(
-    'INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)',
-    [randomUUID(), userId, tokenHash, expiresAt]
+    'INSERT INTO sessions (id, user_id, client, device_label, token_hash, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [randomUUID(), userId, client, deviceLabel, tokenHash, expiresAt]
   );
 
   return token;
+}
+
+function currentSessionTokenHash(req) {
+  const token = sessionToken(req);
+  return token ? hashSessionToken(token) : null;
 }
 
 async function destroySession(req) {
@@ -99,11 +107,27 @@ async function getSessionUser(req) {
     [hashSessionToken(token)]
   );
 
+  if (rows[0]) touchSession(hashSessionToken(token));
   return rows[0] || null;
+}
+
+// Best effort, at most once a minute per session: feeds the "last seen" column
+// of the sessions list without a write on every request.
+function touchSession(tokenHash) {
+  pool
+    .execute(
+      `UPDATE sessions
+          SET last_seen_at = UTC_TIMESTAMP(3)
+        WHERE token_hash = ?
+          AND (last_seen_at IS NULL OR last_seen_at < UTC_TIMESTAMP(3) - INTERVAL 1 MINUTE)`,
+      [tokenHash]
+    )
+    .catch(() => {});
 }
 
 module.exports = {
   createSession,
+  currentSessionTokenHash,
   destroySession,
   expiredSessionCookieHeader,
   getSessionUser,
