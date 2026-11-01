@@ -9,14 +9,16 @@ const {
   cleanupSession,
   createSession,
   getSession,
+  markReconnectAttempt,
   startSessionSweeper,
   touchSession,
   updateSession,
 } = require('./sessionLifecycle');
 const { logIdentityEvent } = require('./securityLog');
+const { DEFAULT_KEEPALIVE_INTERVAL_MS, createDeadPeerMonitor } = require('./wsKeepalive');
 
 const maxTerminalMessageBytes = 64 * 1024;
-const webSocketKeepaliveMs = 25000;
+const webSocketKeepaliveMs = DEFAULT_KEEPALIVE_INTERVAL_MS;
 
 startSessionSweeper();
 
@@ -95,6 +97,14 @@ function buildConnectConfig(host, material) {
 
 function connectShell(ws, resolved) {
   const sessionId = resolved.ephemeralCredential?.sessionId || resolved.host?.id || resolved.hostId || `${Date.now()}`;
+  // A client that reconnects after a transport drop reuses its tab id as the session id.
+  // If the previous relay session has not been torn down yet (the server has not seen
+  // the old socket close), replace it instead of overwriting the map entry and leaking
+  // the old ssh2 client.
+  if (getSession(sessionId)) {
+    markReconnectAttempt(sessionId);
+    cleanupSession(sessionId, 'reconnect_replace');
+  }
   const session = createSession({
     sessionId,
     userId: resolved.userId,
@@ -107,10 +117,16 @@ function connectShell(ws, resolved) {
     hasClient: true,
   });
   let cleaned = false;
+  // Handlers below belong to this session object only. After a reconnect_replace the
+  // map entry for sessionId points at a newer session, and a late close from the old
+  // ssh2 client must neither report to the new socket nor tear the new session down.
+  const isLive = () => !cleaned && getSession(sessionId) === session;
   const cleanupOnce = (reason) => {
     if (cleaned) return;
     cleaned = true;
-    cleanupSession(sessionId, reason);
+    if (getSession(sessionId) === session) {
+      cleanupSession(sessionId, reason);
+    }
   };
 
   if (!resolved.ephemeralCredential) {
@@ -136,15 +152,44 @@ function connectShell(ws, resolved) {
 
   const conn = new Client();
   let stream = null;
-  addTimer(sessionId, setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) ws.ping();
-  }, webSocketKeepaliveMs), 'keepalive');
+  // Connection outcome tracking, used to tell the client whether a retry makes sense:
+  // a drop after the shell was ready is retryable, a failure before ready (auth,
+  // policy, unreachable host) is not.
+  let reachedReady = false;
+  let shellExited = false;
+  let closeNotified = false;
+  const notifyClosed = (reason, retryable) => {
+    if (closeNotified) return;
+    closeNotified = true;
+    send(ws, 'closed', { reason, retryable: Boolean(retryable) });
+  };
+  const notifyError = (message, reason, retryable) => {
+    if (closeNotified) return;
+    closeNotified = true;
+    send(ws, 'error', { message, reason, retryable: Boolean(retryable) });
+  };
+
+  const monitor = createDeadPeerMonitor(ws, {
+    intervalMs: webSocketKeepaliveMs,
+    onTick: () => send(ws, 'keepalive'),
+    onDead: () => {
+      // The client stopped answering pings. Terminate so the TCP half-open state does
+      // not keep the ssh2 session alive until the kernel gives up.
+      try {
+        ws.terminate();
+      } catch {
+        // Best effort.
+      }
+      cleanupOnce('ws_dead_peer');
+    },
+  });
+  addTimer(sessionId, monitor.timer, 'keepalive');
   session.conn = conn;
   session.updatedAt = new Date().toISOString();
 
   ws.on('message', (raw) => {
     try {
-      if (!getSession(sessionId)) return;
+      if (!isLive()) return;
       const message = readMessage(raw);
       if (message.type === 'input' && stream && typeof message.data === 'string') {
         stream.write(message.data);
@@ -175,37 +220,53 @@ function connectShell(ws, resolved) {
   ws.once('error', () => cleanupOnce('ws_error'));
 
   conn.once('ready', () => {
-    if (!getSession(sessionId)) return;
+    if (!isLive()) return;
     updateSession(sessionId, { state: 'connected', connectedAt: new Date().toISOString(), hasClient: true, hasStream: true, stream: null });
     conn.shell({ term: 'xterm-256color' }, (error, shell) => {
+      if (!isLive()) return;
       if (error) {
-        send(ws, 'error', { message: error.message });
+        notifyError(error.message, 'shell_error', false);
         ws.close();
         cleanupOnce('shell_error');
         return;
       }
 
       stream = shell;
+      reachedReady = true;
       updateSession(sessionId, { stream: shell, state: 'connected', hasStream: true, hasClient: true, updatedAt: new Date().toISOString() });
-      send(ws, 'connected');
+      send(ws, 'connected', { sessionId });
       stream.on('data', (data) => {
+        if (!isLive()) return;
         touchSession(sessionId);
         send(ws, 'data', { data: data.toString('utf8') });
       });
+      stream.once('exit', () => {
+        // The remote shell ended on its own (user typed `exit`, or the host killed it).
+        // That is a clean close, not a drop, so the client must not auto-reconnect.
+        shellExited = true;
+      });
       stream.once('close', () => {
-        send(ws, 'closed');
+        if (!isLive()) return;
+        notifyClosed(shellExited ? 'shell_exit' : 'stream_close', !shellExited);
         ws.close();
         cleanupOnce('stream_close');
       });
       stream.once('error', (streamError) => {
-        send(ws, 'error', { message: streamError.message });
+        if (!isLive()) return;
+        notifyError(streamError.message, 'stream_error', true);
         ws.close();
         cleanupOnce('stream_error');
       });
     });
   });
   conn.once('error', (error) => {
-    send(ws, 'error', { message: 'Connection failed after credential resolution' });
+    if (!isLive()) return;
+    const retryable = reachedReady && !shellExited;
+    notifyError(
+      retryable ? `Connection lost: ${error.message}` : 'Connection failed after credential resolution',
+      retryable ? 'client_error' : 'connect_error',
+      retryable
+    );
     logIdentityEvent('credentialUsedForPurpose', {
       userId: resolved.userId,
       hostId: resolved.host?.id || resolved.hostId || null,
@@ -221,11 +282,15 @@ function connectShell(ws, resolved) {
     cleanupOnce('client_error');
   });
   conn.once('end', () => {
-    send(ws, 'closed');
+    if (!isLive()) return;
+    notifyClosed(shellExited ? 'shell_exit' : 'client_end', reachedReady && !shellExited);
     ws.close();
     cleanupOnce('client_end');
   });
   conn.once('close', () => {
+    if (!isLive()) return;
+    notifyClosed(shellExited ? 'shell_exit' : 'client_close', reachedReady && !shellExited);
+    ws.close();
     cleanupOnce('client_close');
   });
 

@@ -208,12 +208,23 @@ ipcMain.on('ssh-connect', (event, payload) => {
         purpose: authorization.purpose || purpose || 'ssh',
       }, resolved.ephemeralCredential, {
         onConnected: (sessionId) => event.reply('ssh-connected', { id: sessionId }),
-        onError: (sessionId, error) => event.reply('ssh-error', { id: sessionId, message: error.message }),
-        onClosed: (sessionId) => event.reply('ssh-closed', { id: sessionId }),
+        onError: (sessionId, error, info = {}) => event.reply('ssh-error', {
+          id: sessionId,
+          message: error.message,
+          reason: info.reason || 'error',
+          retryable: Boolean(info.retryable),
+        }),
+        onClosed: (sessionId, info = {}) => event.reply('ssh-closed', {
+          id: sessionId,
+          reason: info.reason || 'closed',
+          retryable: Boolean(info.retryable),
+        }),
         onData: (sessionId, data) => event.reply('ssh-data', { id: sessionId, data }),
       }, { windowId });
     } catch (error) {
-      event.reply('ssh-error', { id, message: error.message });
+      // Authorization, policy or identity failures happen before any shell exists,
+      // so an automatic retry would only burn connect tokens and rate limit budget.
+      event.reply('ssh-error', { id, message: error.message, reason: 'authorize_error', retryable: false });
     }
   })();
 });

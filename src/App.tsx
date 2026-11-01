@@ -6,7 +6,7 @@ import { SftpFileManager } from './components/SftpFileManager';
 import { TerminalView } from './components/TerminalView';
 import { api, Host, ManagedUser, Session, SshCredential } from './lib/api';
 
-type SshTabStatus = 'connecting' | 'connected' | 'error' | 'closed';
+type SshTabStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'closed';
 
 interface SshTab {
   id: string;
@@ -17,6 +17,9 @@ interface SshTab {
   connectToken: string;
   status: SshTabStatus;
   errorMsg?: string;
+  /** Incremented to ask the terminal for an immediate manual reconnect. */
+  reconnectNonce?: number;
+  reconnectInfo?: { attempt: number; maxAttempts: number; delayMs: number };
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE = 14;
@@ -411,33 +414,9 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!window.ipcRenderer) return;
-
-    const onConnected = (_: any, { id }: { id: string }) => {
-      setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'connected', errorMsg: '' } : tab));
-    };
-
-    const onError = (_: any, { id, message }: { id: string, message: string }) => {
-      setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'error', errorMsg: message } : tab));
-    };
-
-    const onClosed = (_: any, { id }: { id: string }) => {
-      setSshTabs(tabs => tabs.map(tab => tab.id === id ? { ...tab, status: 'closed', errorMsg: 'SSH connection closed.' } : tab));
-    };
-
-    window.ipcRenderer.on('ssh-connected', onConnected);
-    window.ipcRenderer.on('ssh-error', onError);
-    window.ipcRenderer.on('ssh-closed', onClosed);
-
-    return () => {
-      if (window.ipcRenderer) {
-        window.ipcRenderer.removeListener('ssh-connected', onConnected);
-        window.ipcRenderer.removeListener('ssh-error', onError);
-        window.ipcRenderer.removeListener('ssh-closed', onClosed);
-      }
-    };
-  }, []);
+  // Electron lifecycle events (ssh-connected / ssh-error / ssh-closed) are consumed by
+  // each TerminalView for its own session id, so both runtimes share one reconnect
+  // state machine and report through the same callbacks.
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -697,11 +676,17 @@ function App() {
     setSshTabs(tabs => tabs.map(tab => tab.id === tabId ? { ...tab, ...patch } : tab));
   };
 
+  const reconnectTab = (tabId: string) => {
+    setSshTabs(tabs => tabs.map(tab => tab.id === tabId
+      ? { ...tab, status: 'connecting', errorMsg: '', reconnectInfo: undefined, reconnectNonce: (tab.reconnectNonce || 0) + 1 }
+      : tab));
+  };
+
   const activeTab = sshTabs.find(tab => tab.id === activeTabId) || null;
   const hostStatus = (hostId: string) => {
     const tabs = sshTabs.filter(tab => tab.hostId === hostId);
     if (tabs.some(tab => tab.status === 'connected')) return 'connected';
-    if (tabs.some(tab => tab.status === 'connecting')) return 'connecting';
+    if (tabs.some(tab => tab.status === 'connecting' || tab.status === 'reconnecting')) return 'connecting';
     if (tabs.some(tab => tab.status === 'error')) return 'error';
     if (tabs.some(tab => tab.status === 'closed')) return 'closed';
     return 'idle';
@@ -1093,7 +1078,7 @@ function App() {
                   onClick={() => setActiveTabId(tab.id)}
                   className={`h-full min-w-[180px] max-w-[240px] border-r border-border px-3 flex items-center gap-2 text-left ${activeTabId === tab.id ? 'bg-background text-white' : 'text-textMuted hover:bg-white/5'}`}
                 >
-                  <div className={`w-2 h-2 rounded-full shrink-0 ${tab.status === 'connected' ? 'bg-green-500' : tab.status === 'error' || tab.status === 'closed' ? 'bg-red-500' : 'bg-yellow-500'}`} />
+                  <div className={`w-2 h-2 rounded-full shrink-0 ${tab.status === 'connected' ? 'bg-green-500' : tab.status === 'error' || tab.status === 'closed' ? 'bg-red-500' : tab.status === 'reconnecting' ? 'bg-yellow-500 animate-pulse' : 'bg-yellow-500'}`} />
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-medium truncate">{tab.name}</div>
                     <div className="text-[10px] text-textMuted truncate">{tab.hostname}</div>
@@ -1164,11 +1149,35 @@ function App() {
                         <span className="text-sm text-textMuted">Connecting to {tab.hostname}...</span>
                       </div>
                     )}
+                    {tab.status === 'reconnecting' && (
+                      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200 shadow-lg backdrop-blur">
+                        <Loader2 size={14} className="animate-spin shrink-0" />
+                        <span>
+                          Connection lost. Reconnecting to {tab.hostname}
+                          {tab.reconnectInfo ? ` (attempt ${tab.reconnectInfo.attempt}/${tab.reconnectInfo.maxAttempts})` : ''}...
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => reconnectTab(tab.id)}
+                          className="rounded-md border border-yellow-400/40 px-2 py-1 text-[11px] font-medium text-yellow-100 hover:bg-yellow-500/20 transition"
+                        >
+                          Retry now
+                        </button>
+                      </div>
+                    )}
                     {(tab.status === 'error' || tab.status === 'closed') && tab.errorMsg && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-background z-10 flex-col space-y-3">
-                        <div className="p-4 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg max-w-md text-center">
-                          <h3 className="font-semibold mb-2">Connection Failed</h3>
+                      <div className="absolute inset-0 flex items-center justify-center bg-background/90 z-10 flex-col space-y-3">
+                        <div className={`p-4 rounded-lg max-w-md text-center border ${tab.status === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-white/5 text-textMuted border-border'}`}>
+                          <h3 className="font-semibold mb-2">{tab.status === 'error' ? 'Connection Failed' : 'Session Ended'}</h3>
                           <p className="text-sm opacity-80">{tab.errorMsg}</p>
+                          <button
+                            type="button"
+                            onClick={() => reconnectTab(tab.id)}
+                            className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-background hover:bg-primary/95 transition cursor-pointer"
+                          >
+                            <RotateCcw size={14} />
+                            Reconnect
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1182,9 +1191,11 @@ function App() {
                       fontSize={terminalFontSize}
                       bottomPaddingPx={isTabletViewport ? 40 : DEFAULT_TERMINAL_BOTTOM_PADDING_PX}
                       showQuickActions={isTabletViewport || isMobileViewport}
-                      onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '' })}
-                      onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message })}
-                      onClosed={() => updateTab(tab.id, { status: 'closed', errorMsg: 'SSH connection closed. Reconnect from the host list to open a new shell.' })}
+                      reconnectNonce={tab.reconnectNonce || 0}
+                      onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '', reconnectInfo: undefined })}
+                      onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message, reconnectInfo: undefined })}
+                      onClosed={({ message }) => updateTab(tab.id, { status: 'closed', errorMsg: message, reconnectInfo: undefined })}
+                      onReconnecting={(info) => updateTab(tab.id, { status: 'reconnecting', errorMsg: '', reconnectInfo: info })}
                       onConnectTokenConsumed={() => updateTab(tab.id, { connectToken: '' })}
                     />
                   </div>

@@ -683,3 +683,51 @@ As part of the completion of Phase 1, a comprehensive security review and implem
 2. **[x] Priority 2: Plaintext Host Password Deprecation** (Completed: Migrated all legacy host passwords and dropped the password column).
 3. **Priority 3: Native Memory Wiping Exploration**: Integrate a native C++ addon (like node-sodium or a custom native helper) for Electron/server runtimes to allocate secure, non-pageable memory for private keys, ensuring absolute zero-fill on disposal.
 
+
+## Phase 2.1 — Connection Resilience (reconnect)
+
+Analysis: `docs/CONNECTION_RESILIENCE_AND_RUNTIME_ANALYSIS.md` (2026-11-01).
+
+What was built:
+
+- Dead-peer detection on the browser relay WebSocket (`server/wsKeepalive.js`): every ping now
+  expects a pong, and a socket that misses two in a row is terminated so the ssh2 session is
+  cleaned up within about 50 s instead of waiting for the TCP stack. The relay also sends an
+  application-level `keepalive` frame on every tick because browsers cannot observe protocol pings.
+- Close semantics on both runtimes: `closed` and `error` messages (relay) and `ssh-closed` /
+  `ssh-error` IPC replies (Electron) now carry a `reason` and a `retryable` flag. A drop after the
+  shell was ready is retryable; a clean shell exit (`shell_exit`, detected through the stream
+  `exit` event), an authorization/policy failure, or a connect that never reached a shell is not.
+- A shared client reconnect policy (`src/lib/reconnectPolicy.ts`): exponential backoff
+  1 s → 30 s with ±20 % jitter, at most 6 automatic attempts (about one minute in total), which
+  stays inside the per-host connect-token and connect-attempt rate limits of the zero-trust layer.
+- `TerminalView` keeps the xterm buffer across drops, requests a fresh one-time connect token for
+  every attempt (nothing from the previous connection is reused), watches for a silent relay
+  (65 s without any frame closes the socket locally), retries immediately when the browser comes
+  back online or the tab becomes visible, and exposes a manual reconnect through `reconnectNonce`.
+- Tab UI: a new `reconnecting` status with attempt counter and "Retry now", and a "Reconnect"
+  button on the closed/error overlay. Electron lifecycle events are now consumed per terminal
+  instead of globally in `App.tsx`, so both runtimes share one state machine.
+- Relay and Electron session managers guard against late events from a replaced session: a
+  reconnect that reuses the tab id cleans up the previous session (`reconnect_replace`) and its
+  asynchronous stream close can no longer be reported against the new attempt.
+
+Security decision:
+
+- No credential caching for reconnect. Every attempt is a full connect-token → access policy →
+  identity resolve → ephemeral credential → clear cycle.
+- Automatic retries are budgeted below the existing rate limits rather than exempted from them.
+- Failures before a shell exists are never retried automatically, so a wrong key or a denied
+  policy does not turn into a token-burning loop.
+
+Limitations:
+
+- This is case B of the analysis (re-establish a new shell). The running shell is still lost on a
+  transport drop; detach + resume (case A) is the next step.
+- Live verification against the Caddy/WireGuard production path is still required.
+
+Verification:
+
+- `server/__tests__/wsKeepalive.test.js` (4 tests) and the existing suites pass; `tsc --noEmit`
+  is clean. The reconnect schedule and stop conditions were checked with a scripted run of the
+  compiled policy module.

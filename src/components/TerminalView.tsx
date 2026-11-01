@@ -3,6 +3,24 @@ import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { Copy, Clipboard } from 'lucide-react';
 import 'xterm/css/xterm.css';
+import { api } from '../lib/api';
+import {
+  RELAY_WATCHDOG_MS,
+  decideReconnect,
+  type ConnectionCloseInfo,
+  type ReconnectDecision,
+} from '../lib/reconnectPolicy';
+
+export interface TerminalReconnectInfo {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+}
+
+export interface TerminalClosedInfo {
+  reason: string;
+  message: string;
+}
 
 interface TerminalViewProps {
   sessionId: string;
@@ -20,17 +38,31 @@ interface TerminalViewProps {
   fontSize: number;
   bottomPaddingPx?: number;
   showQuickActions?: boolean;
+  /** Increment to force an immediate manual reconnect (resets the automatic attempt counter). */
+  reconnectNonce?: number;
   onConnected?: () => void;
   onError?: (message: string) => void;
-  onClosed?: () => void;
+  onClosed?: (info: TerminalClosedInfo) => void;
+  onReconnecting?: (info: TerminalReconnectInfo) => void;
   onConnectTokenConsumed?: () => void;
 }
 
 type SshSocketMessage = {
-  type: 'connected' | 'closed' | 'error' | 'data';
+  type: 'connected' | 'closed' | 'error' | 'data' | 'keepalive';
   message?: string;
   data?: string;
+  reason?: string;
+  retryable?: boolean;
 };
+
+type IpcLifecyclePayload = {
+  id: string;
+  message?: string;
+  reason?: string;
+  retryable?: boolean;
+};
+
+const WATCHDOG_CLOSE_CODE = 4000;
 
 function sshSocketUrl(hostId: string, sessionId: string) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -46,9 +78,11 @@ export function TerminalView({
   fontSize,
   bottomPaddingPx = 24,
   showQuickActions = false,
+  reconnectNonce = 0,
   onConnected,
   onError,
   onClosed,
+  onReconnecting,
   onConnectTokenConsumed,
 }: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -57,7 +91,11 @@ export function TerminalView({
   const fitAddon = useRef<FitAddon | null>(null);
   const inputDisposable = useRef<{ dispose: () => void } | null>(null);
   const inputSendRef = useRef<(data: string) => void>(() => {});
+  const reconnectRef = useRef<() => void>(() => {});
   const activeRef = useRef(active);
+  // Always call the latest callbacks even though the connection closure is created once.
+  const callbacksRef = useRef({ onConnected, onError, onClosed, onReconnecting, onConnectTokenConsumed });
+  callbacksRef.current = { onConnected, onError, onClosed, onReconnecting, onConnectTokenConsumed };
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
@@ -79,7 +117,7 @@ export function TerminalView({
   useEffect(() => {
     if (!terminalRef.current) return;
     if (!connectToken) {
-      onError?.('Connect authorization unavailable');
+      callbacksRef.current.onError?.('Connect authorization unavailable');
       return;
     }
 
@@ -105,7 +143,7 @@ export function TerminalView({
 
     fitAddon.current = new FitAddon();
     term.current.loadAddon(fitAddon.current);
-    
+
     term.current.open(terminalRef.current);
     fitAddon.current.fit();
 
@@ -114,7 +152,7 @@ export function TerminalView({
       if (event.type !== 'keydown') return true;
 
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      
+
       const isCopy = (isMac && event.metaKey && event.key === 'c') ||
                      (!isMac && event.ctrlKey && event.shiftKey && event.key === 'C') ||
                      (!isMac && event.ctrlKey && event.key === 'c' && terminal.hasSelection());
@@ -138,19 +176,77 @@ export function TerminalView({
 
       return true;
     });
+
+    // ---------------------------------------------------------------------
+    // Connection state machine (shared by the browser relay and Electron IPC)
+    // ---------------------------------------------------------------------
+    const runtime: 'browser' | 'electron' = window.ipcRenderer && host ? 'electron' : 'browser';
+    let disposed = false;
     let socket: WebSocket | null = null;
-    let socketFailed = false;
+    // Bumped whenever the socket is replaced or the component unmounts, so late
+    // events from a previous socket are ignored.
+    let socketGeneration = 0;
+    let attempts = 0;          // consecutive automatic reconnect attempts
+    let everConnected = false; // this tab reached a ready shell at least once
+    let retryTimer: number | null = null;
+    let watchdogTimer: number | null = null;
+    let waitingForOnline = false;
     let consumeTokenTimer: number | null = null;
 
+    const writeStatus = (text: string) => {
+      term.current?.write(`\r\n\x1b[2m[${text}]\x1b[0m\r\n`);
+    };
+
+    const clearRetryTimer = () => {
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const clearWatchdog = () => {
+      if (watchdogTimer !== null) {
+        window.clearTimeout(watchdogTimer);
+        watchdogTimer = null;
+      }
+    };
+
+    const armWatchdog = () => {
+      clearWatchdog();
+      watchdogTimer = window.setTimeout(() => {
+        watchdogTimer = null;
+        // No data and no keepalive for too long: assume a half-open socket and close
+        // it locally so the reconnect policy can take over.
+        try {
+          socket?.close(WATCHDOG_CLOSE_CODE, 'relay watchdog');
+        } catch {
+          // Already closed.
+        }
+      }, RELAY_WATCHDOG_MS);
+    };
+
     const sendTerminalInput = (data: string) => {
-      if (window.ipcRenderer) {
+      if (runtime === 'electron') {
         window.ipcRenderer.send('ssh-input', { id: sessionId, data });
+        return;
       }
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'input', data }));
       }
     };
     inputSendRef.current = sendTerminalInput;
+
+    const sendResize = () => {
+      if (!term.current) return;
+      const { cols, rows } = term.current;
+      if (runtime === 'electron') {
+        window.ipcRenderer.send('ssh-resize', { id: sessionId, cols, rows });
+        return;
+      }
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
+    };
 
     const pasteText = (text: string) => {
       if (!text) return;
@@ -167,7 +263,123 @@ export function TerminalView({
 
     terminalRef.current.addEventListener('paste', handlePasteEvent, true);
 
-    if (window.ipcRenderer && host) {
+    const markConnected = () => {
+      everConnected = true;
+      attempts = 0;
+      waitingForOnline = false;
+      callbacksRef.current.onConnected?.();
+      // The server shell may have been created with default dimensions; sync them.
+      sendResize();
+    };
+
+    const finish = (decision: Extract<ReconnectDecision, { action: 'stop' }>, info: ConnectionCloseInfo) => {
+      if (decision.final === 'closed') {
+        callbacksRef.current.onClosed?.({ reason: info.reason, message: decision.message });
+      } else {
+        callbacksRef.current.onError?.(decision.message);
+      }
+    };
+
+    const scheduleRetry = (decision: Extract<ReconnectDecision, { action: 'retry' }>) => {
+      attempts = decision.attempt;
+      callbacksRef.current.onReconnecting?.({
+        attempt: decision.attempt,
+        maxAttempts: decision.maxAttempts,
+        delayMs: decision.delayMs,
+      });
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        waitingForOnline = true;
+        writeStatus(`connection lost, offline: waiting for network (attempt ${decision.attempt}/${decision.maxAttempts})`);
+        return;
+      }
+      writeStatus(`connection lost, reconnecting in ${Math.max(1, Math.round(decision.delayMs / 1000))}s (attempt ${decision.attempt}/${decision.maxAttempts})`);
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        void connect(null);
+      }, decision.delayMs);
+    };
+
+    const handleDrop = (info: ConnectionCloseInfo) => {
+      if (disposed) return;
+      clearRetryTimer();
+      clearWatchdog();
+      const decision = decideReconnect(info, attempts);
+      if (decision.action === 'retry') {
+        scheduleRetry(decision);
+        return;
+      }
+      finish(decision, info);
+    };
+
+    const openSocket = (token: string) => {
+      const generation = ++socketGeneration;
+      const socketUrl = new URL(sshSocketUrl(hostId, sessionId));
+      socketUrl.searchParams.set('connectToken', token);
+      if (host?.credentialId) socketUrl.searchParams.set('credentialId', host.credentialId);
+      if (host?.authType) socketUrl.searchParams.set('authType', host.authType);
+      socketUrl.searchParams.set('purpose', 'ssh');
+
+      const ws = new WebSocket(socketUrl.toString());
+      socket = ws;
+      let serverOutcome: ConnectionCloseInfo | null = null;
+      let connectedThisSocket = false;
+
+      ws.onmessage = (event) => {
+        if (generation !== socketGeneration || disposed) return;
+        armWatchdog();
+        try {
+          const message = JSON.parse(event.data) as SshSocketMessage;
+          switch (message.type) {
+            case 'connected':
+              connectedThisSocket = true;
+              markConnected();
+              break;
+            case 'data':
+              if (message.data) term.current?.write(message.data);
+              break;
+            case 'keepalive':
+              break;
+            case 'closed':
+              serverOutcome = {
+                reason: message.reason || 'closed',
+                retryable: Boolean(message.retryable),
+              };
+              break;
+            case 'error':
+              serverOutcome = {
+                reason: message.reason || 'error',
+                retryable: Boolean(message.retryable),
+                message: message.message || 'SSH connection failed',
+              };
+              break;
+            default:
+              break;
+          }
+        } catch {
+          serverOutcome = { reason: 'invalid_response', retryable: false, message: 'SSH relay sent an invalid response' };
+          ws.close();
+        }
+      };
+      ws.onerror = () => {
+        // The close event that follows carries the decision; nothing to do here.
+      };
+      ws.onclose = (event) => {
+        if (generation !== socketGeneration || disposed) return;
+        clearWatchdog();
+        const info: ConnectionCloseInfo = serverOutcome ?? {
+          reason: event.code === WATCHDOG_CLOSE_CODE ? 'watchdog' : 'transport',
+          // A transport drop is only worth retrying once a shell has existed; a socket
+          // that never connected usually failed authorization at the upgrade.
+          retryable: everConnected,
+          message: connectedThisSocket || everConnected ? undefined : 'SSH relay connection failed',
+        };
+        handleDrop(info);
+      };
+      armWatchdog();
+    };
+
+    const sendElectronConnect = (token: string) => {
+      if (!host) return;
       window.ipcRenderer.send('ssh-connect', {
         id: sessionId,
         userId: host.userId,
@@ -178,43 +390,108 @@ export function TerminalView({
         username: host.username,
         authType: host.authType,
         credentialId: host.credentialId,
-        connectToken,
+        connectToken: token,
         purpose: 'ssh',
       });
-      consumeTokenTimer = window.setTimeout(() => onConnectTokenConsumed?.(), 0);
+    };
+
+    const connect = async (token: string | null) => {
+      if (disposed) return;
+      try {
+        let effectiveToken = token;
+        if (!effectiveToken) {
+          // Every reconnect goes through the zero-trust flow again with a fresh
+          // one-time token; nothing from the previous connection is reused.
+          const response = await api.requestConnectToken({
+            hostId,
+            runtime,
+            purpose: 'ssh',
+            authType: host?.authType || null,
+            credentialId: host?.credentialId || null,
+          });
+          effectiveToken = response.token;
+        }
+        if (disposed) return;
+        if (runtime === 'electron') {
+          sendElectronConnect(effectiveToken);
+        } else {
+          openSocket(effectiveToken);
+        }
+      } catch (error) {
+        if (disposed) return;
+        const message = error instanceof Error ? error.message : 'Unable to authorize SSH connect';
+        handleDrop({ reason: 'authorize_error', retryable: false, message });
+      }
+    };
+
+    // Electron lifecycle events for this session id.
+    const onIpcConnected = (_: unknown, payload: IpcLifecyclePayload) => {
+      if (payload.id !== sessionId || disposed) return;
+      markConnected();
+    };
+    const onIpcError = (_: unknown, payload: IpcLifecyclePayload) => {
+      if (payload.id !== sessionId || disposed) return;
+      handleDrop({
+        reason: payload.reason || 'error',
+        retryable: Boolean(payload.retryable),
+        message: payload.message || 'SSH connection failed',
+      });
+    };
+    const onIpcClosed = (_: unknown, payload: IpcLifecyclePayload) => {
+      if (payload.id !== sessionId || disposed) return;
+      handleDrop({ reason: payload.reason || 'closed', retryable: Boolean(payload.retryable) });
+    };
+    const onIpcData = (_: unknown, data: { id: string; data: string }) => {
+      if (data.id === sessionId && term.current) {
+        term.current.write(data.data);
+      }
+    };
+
+    if (runtime === 'electron') {
+      window.ipcRenderer.on('ssh-connected', onIpcConnected);
+      window.ipcRenderer.on('ssh-error', onIpcError);
+      window.ipcRenderer.on('ssh-closed', onIpcClosed);
+      window.ipcRenderer.on('ssh-data', onIpcData);
     }
 
-    if (!window.ipcRenderer) {
-      const socketUrl = new URL(sshSocketUrl(hostId, sessionId));
-      socketUrl.searchParams.set('connectToken', connectToken);
-      if (host?.credentialId) socketUrl.searchParams.set('credentialId', host.credentialId);
-      if (host?.authType) socketUrl.searchParams.set('authType', host.authType);
-      socketUrl.searchParams.set('purpose', 'ssh');
-      socket = new WebSocket(socketUrl.toString());
-      socket.onmessage = (event) => {
+    // Network hints: retry immediately when the network comes back or the tab is
+    // shown again instead of waiting out the backoff.
+    const handleOnline = () => {
+      if (disposed || !waitingForOnline) return;
+      waitingForOnline = false;
+      writeStatus('network is back, reconnecting');
+      void connect(null);
+    };
+    const handleVisibility = () => {
+      if (disposed || document.visibilityState !== 'visible' || retryTimer === null) return;
+      clearRetryTimer();
+      void connect(null);
+    };
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    reconnectRef.current = () => {
+      if (disposed) return;
+      clearRetryTimer();
+      clearWatchdog();
+      waitingForOnline = false;
+      attempts = 0;
+      if (socket) {
+        // Ignore the close event of the socket we are abandoning.
+        socketGeneration += 1;
         try {
-          const message = JSON.parse(event.data) as SshSocketMessage;
-          if (message.type === 'connected') onConnected?.();
-          if (message.type === 'closed') onClosed?.();
-          if (message.type === 'error') {
-            socketFailed = true;
-            onError?.(message.message || 'SSH connection failed');
-          }
-          if (message.type === 'data' && message.data) term.current?.write(message.data);
+          socket.close();
         } catch {
-          socketFailed = true;
-          onError?.('SSH relay sent an invalid response');
+          // Already closed.
         }
-      };
-      socket.onerror = () => {
-        socketFailed = true;
-        onError?.('SSH relay connection failed');
-      };
-      socket.onclose = () => {
-        if (!socketFailed) onClosed?.();
-      };
-      consumeTokenTimer = window.setTimeout(() => onConnectTokenConsumed?.(), 0);
-    }
+        socket = null;
+      }
+      writeStatus('reconnecting');
+      void connect(null);
+    };
+
+    void connect(connectToken);
+    consumeTokenTimer = window.setTimeout(() => callbacksRef.current.onConnectTokenConsumed?.(), 0);
 
     // Listen to input from the user (typing)
     inputDisposable.current = term.current.onData((data) => {
@@ -225,20 +502,7 @@ export function TerminalView({
     const handleResize = () => {
       if (!fitAddon.current || !term.current) return;
       fitAddon.current.fit();
-      if (window.ipcRenderer) {
-        window.ipcRenderer.send('ssh-resize', { 
-          id: sessionId, 
-          cols: term.current.cols, 
-          rows: term.current.rows 
-        });
-      }
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          type: 'resize',
-          cols: term.current.cols,
-          rows: term.current.rows,
-        }));
-      }
+      sendResize();
     };
     window.addEventListener('resize', handleResize);
 
@@ -251,34 +515,34 @@ export function TerminalView({
       resizeObserver.observe(terminalRef.current);
     }
 
-    // Listen to data from SSH server
-    const onData = (_: any, data: { id: string, data: string }) => {
-      if (data.id === sessionId && term.current) {
-        term.current.write(data.data);
-      }
-    };
-
-    if (window.ipcRenderer) {
-      window.ipcRenderer.on('ssh-data', onData);
-    }
-
     return () => {
+      disposed = true;
+      socketGeneration += 1;
+      clearRetryTimer();
+      clearWatchdog();
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
       resizeObserver.disconnect();
       terminalRef.current?.removeEventListener('paste', handlePasteEvent, true);
       inputDisposable.current?.dispose?.();
       inputDisposable.current = null;
-      if (consumeTokenTimer) {
+      if (consumeTokenTimer !== null) {
         window.clearTimeout(consumeTokenTimer);
       }
-      if (window.ipcRenderer) {
+      if (runtime === 'electron') {
         window.ipcRenderer.send('ssh-disconnect', { id: sessionId });
-        window.ipcRenderer.removeListener('ssh-data', onData);
+        window.ipcRenderer.removeListener('ssh-connected', onIpcConnected);
+        window.ipcRenderer.removeListener('ssh-error', onIpcError);
+        window.ipcRenderer.removeListener('ssh-closed', onIpcClosed);
+        window.ipcRenderer.removeListener('ssh-data', onIpcData);
       }
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'disconnect' }));
       }
       socket?.close();
+      socket = null;
+      reconnectRef.current = () => {};
       fitAddon.current = null;
       inputSendRef.current = () => {};
       term.current?.dispose();
@@ -287,15 +551,21 @@ export function TerminalView({
   }, [hostId, sessionId]);
 
   useEffect(() => {
+    if (reconnectNonce > 0) {
+      reconnectRef.current();
+    }
+  }, [reconnectNonce]);
+
+  useEffect(() => {
     if (active && fitAddon.current && term.current) {
       const frame = requestAnimationFrame(() => {
         if (fitAddon.current && term.current) {
           fitAddon.current.fit();
           if (window.ipcRenderer) {
-            window.ipcRenderer.send('ssh-resize', { 
-              id: sessionId, 
-              cols: term.current.cols, 
-              rows: term.current.rows 
+            window.ipcRenderer.send('ssh-resize', {
+              id: sessionId,
+              cols: term.current.cols,
+              rows: term.current.rows
             });
           }
         }
@@ -326,9 +596,9 @@ export function TerminalView({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!term.current) return;
-    
+
     setHasSelection(term.current.hasSelection());
-    
+
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) {
       setContextMenu({
@@ -386,7 +656,7 @@ export function TerminalView({
   };
 
   return (
-    <div 
+    <div
       ref={containerRef}
       className="relative w-full h-full"
       onContextMenu={handleContextMenu}
