@@ -325,3 +325,27 @@ question disappear from the UI. Items 7–8 are research extensions.
   native desktop use?" → §3.4 runtime profiles with explicit network origin, §3.5 tunnel mode.
 - Novelty angle to add: *relay-as-bastion with egress policy* and *origin-explicit connection
   paths*, which existing tools (Termius, Tabby, web gateways) treat implicitly.
+
+## Addendum (2026-11-01): resume must replace a stale socket behind an edge proxy
+
+Production finding while preparing the resume test on `ata.uinjakarta.id`. The WebSocket
+path is browser → edge Caddy (38.47.180.2) → WireGuard → VM Caddy → relay. When the
+laptop loses Wi‑Fi only the first leg dies, and it dies silently: the edge proxy keeps
+its upstream connection to the relay open, so the relay sees no `close` event. It only
+learns about the drop through the dead-peer monitor (2 missed pongs ≈ 50 s).
+
+The first release gated `resumeSession` on `state === DETACHED`. A client coming back
+within those ~50 s therefore got `409 Session is not resumable` and fell back to a fresh
+shell — the short drops the feature exists for were the one case it did not cover.
+
+Fix: a session is resumable when DETACHED **or** CONNECTED with a live shell.
+`ctrl.resume()` then detaches the stale socket (`detached`, reason `socket_replaced`),
+terminates it and attaches the new one; the stale socket's later `close` is ignored by
+the existing `ctrl.ws !== closingWs` guard. The trust boundary is unchanged: the resume
+token is one-time and bound to user + session, and the request must also carry the
+user's own authenticated cookie, which already allows opening new sessions. Covered by
+the `stale:` checks in `scripts/integration/relay-resume-test.js` (19/19).
+
+Timing consequence: the 90 s grace runs from the moment the relay *detects* the drop, so
+the effective resume window after a silent drop is ≈ 50 s (detection) + 90 s (grace).
+A future tuning knob is `WS_KEEPALIVE_INTERVAL_MS` (25 s) × `WS_MAX_MISSED_PONGS` (2).

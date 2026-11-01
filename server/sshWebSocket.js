@@ -401,6 +401,24 @@ function connectShell(initialWs, resolved) {
   });
 
   ctrl.resume = (ws) => {
+    // The previous socket may still be attached if the relay has not yet noticed
+    // it went half-open (see resumeSession). The valid one-time resume token
+    // proves the legitimate client is back, so replace the stale socket instead
+    // of refusing. detach() stops its keepalive monitor and marks the session
+    // DETACHED; its later 'close' event is ignored because ctrl.ws has moved on.
+    if (ctrl.ws && ctrl.ws !== ws) {
+      const stale = ctrl.ws;
+      detach('socket_replaced');
+      try {
+        stale.terminate();
+      } catch {
+        // Best effort; the socket may already be gone.
+      }
+    }
+    if (ctrl.cleaned || ctrl.session.state !== SESSION_STATE.DETACHED) {
+      // The shell went away between validation and resume (e.g. it exited).
+      throw new Error('Session ended before it could be resumed');
+    }
     markResumed(sessionId, ws);
     if (ctrl.graceTimer) {
       clearTimeout(ctrl.graceTimer);
@@ -466,7 +484,20 @@ async function resumeSession(req, url) {
   const session = getSession(sessionId);
   // Validate the session is resumable before consuming the one-time token, so a
   // token is not burned when there is nothing to resume.
-  if (!ctrl || !session || session.userId !== user.id || session.state !== SESSION_STATE.DETACHED) {
+  //
+  // A session is resumable when it is DETACHED, or when it is still CONNECTED
+  // with a live shell: in a multi-hop deployment (browser -> edge proxy -> relay)
+  // the relay's leg stays up when the client's network drops, so the relay only
+  // learns about the drop through missed pongs. A client that comes back before
+  // that and presents a valid resume token must be allowed to replace the stale
+  // socket, otherwise exactly the short drops the feature exists for would fall
+  // back to a fresh shell. This does not widen the trust boundary: the token is
+  // one-time, bound to this user and session, and the request must also carry the
+  // user's own authenticated cookie, which already lets them open new sessions.
+  const resumable = Boolean(ctrl && session)
+    && (session.state === SESSION_STATE.DETACHED
+      || (session.state === SESSION_STATE.CONNECTED && ctrl.reachedReady && !ctrl.shellExited));
+  if (!ctrl || !session || session.userId !== user.id || !resumable) {
     throw Object.assign(new Error('Session is not resumable'), { status: 409 });
   }
 

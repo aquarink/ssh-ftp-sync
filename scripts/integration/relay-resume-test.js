@@ -200,6 +200,37 @@ async function main() {
       check('explicit disconnect tears the session down', !getSession(sessionId));
     }
 
+    // 1b. resume while the previous socket is still attached: the relay has not
+    // noticed the client-side drop yet (half-open socket behind an edge proxy).
+    // The valid resume token must replace the stale socket, not be refused.
+    {
+      const sessionId = 'resume-stale';
+      const ws1 = track(new WebSocket(connectUrl(sessionId)));
+      const connected = await waitFor(ws1, (m) => m.type === 'connected');
+      check('stale: session connected', getSession(sessionId)?.state === SESSION_STATE.CONNECTED);
+      const detachedBefore = getSessionMetrics().sessionsDetached;
+      const resumedBefore = getSessionMetrics().sessionsResumed;
+
+      // Deliberately do NOT close ws1.
+      const ws2 = track(new WebSocket(resumeUrl(sessionId, connected.resumeToken)));
+      const resumed = await waitFor(ws2, (m) => m.type === 'resumed');
+      check('stale: resume accepted while old socket still attached', Boolean(resumed.resumeToken));
+      await waitClosed(ws1);
+      check('stale: old socket is terminated', ws1.readyState === WebSocket.CLOSED);
+      check('stale: session connected on the new socket', getSession(sessionId)?.state === SESSION_STATE.CONNECTED);
+      check('stale: replacement is counted as detach + resume',
+        getSessionMetrics().sessionsDetached === detachedBefore + 1
+        && getSessionMetrics().sessionsResumed === resumedBefore + 1);
+
+      currentShellStream.write('AFTER-REPLACE\n');
+      const after = await waitFor(ws2, (m) => m.type === 'data' && m.data.includes('AFTER-REPLACE'));
+      check('stale: shell output flows to the new socket', after.data.includes('AFTER-REPLACE'));
+
+      ws2.send(JSON.stringify({ type: 'disconnect' }));
+      await sleep(150);
+      check('stale: explicit disconnect tears the session down', !getSession(sessionId));
+    }
+
     // 2. resume token is one-time
     {
       const sessionId = 'resume-2';

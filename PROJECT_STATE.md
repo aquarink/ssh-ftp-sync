@@ -813,3 +813,9 @@ Limitations:
 - Resume is browser-relay only (case A). The Electron and fresh-connect paths still use the
   Phase 2.1 re-establish behavior (case B).
 - Still needs live verification against the Caddy/WireGuard production path.
+
+### Phase 2.3 — Resume replaces stale sockets (2026-11-01)
+- `resumeSession` now accepts CONNECTED sessions with a live shell, not only DETACHED. `ctrl.resume()` detaches and terminates the stale socket (`detached` reason `socket_replaced`) before attaching the new one.
+- Why: behind the production edge proxy (browser → Caddy 38.47.180.2 → WireGuard → VM) the relay only notices a silent client drop after ~50 s of missed pongs, so short drops were refused with 409 and fell back to a fresh shell.
+- Trust boundary unchanged: one-time, user+session-bound resume token plus the user's own auth cookie.
+- Tests: `scripts/integration/relay-resume-test.js` 19/19 (7 new `stale:` checks); Jest server suite 134/134.

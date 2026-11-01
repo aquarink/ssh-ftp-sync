@@ -59,10 +59,23 @@ All have safe defaults in code; set them in `.env` on the VM only to override.
 1. Open `https://ata.uinjakarta.id`, connect a terminal to a host.
 2. Kill the network (toggle Wi-Fi off ~10s) while something like `top` runs.
    Expected: the tab shows "Connection lost. Reconnecting…", then the SAME shell
-   continues with `top` still running (resume within the 90s grace window).
-3. Leave it off past 90s: expected automatic fallback to a fresh shell in the same tab.
-4. Check the API logs for `[session] detached` / `resumed` events and
-   `/api/security/session-metrics` for `sessionsDetached` / `sessionsResumed`.
+   continues with `top` still running. Behind the edge proxy the relay usually has
+   not noticed the drop yet (it needs ~50s of missed pongs), so the log shows
+   `[session] detached` with reason `socket_replaced` immediately followed by
+   `[session] resumed`: the returning client replaced its stale socket.
+3. Leave the network off for ~3 minutes. The relay detects the drop after ~50s
+   (`detached`, reason `ws_close`), holds the shell for the 90s grace, then logs
+   `detach-expired`. When the network returns the tab falls back to a fresh shell.
+   The effective resume window after a silent drop is therefore ≈ 50s + 90s.
+4. Check the API logs for `[session] detached` / `resumed` / `detach-expired` and
+   `/api/security/session-metrics` (admin login required) for `sessionsDetached`,
+   `sessionsResumed` and `detachExpired`.
+
+Watch the relay log live from the laptop while testing:
+
+```bash
+ssh -t wazuh@10.88.0.12 "sudo journalctl -u ant-tech-async-api -f -o cat | grep --line-buffered -A9 -E '\[session\] (detached|resumed|detach-expired|reconnect-attempt)'"
+```
 
 ## Security follow-up (do this)
 
