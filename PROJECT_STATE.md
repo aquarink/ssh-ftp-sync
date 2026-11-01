@@ -830,3 +830,8 @@ Limitations:
 - `electron/apiProxy.js`: renderer API calls go through `api-request` IPC and the main process fetches with the session cookie jar (no CORS/SameSite issues from `file://`); the relay WebSocket handshake gets the session cookie injected.
 - Relay accepts `runtime=electron`; token scope check unchanged. Transport per tab: `direct` (ssh2 in main) when the target is reachable, else `relay`; chosen on connect and re-evaluated on reconnect.
 - Tests: `electron/appConfig.test.js`, `electron/apiProxy.test.js`; relay integration test gains runtime checks. Known gap: Turnstile on `file://` login (see analysis doc).
+
+### Phase 2.6 — Desktop device login (design, 2026-11-02)
+- `docs/DESKTOP_DEVICE_LOGIN_DESIGN.md`: closes the Turnstile-on-`file://` gap with a device authorization flow (RFC 8628 adapted). The desktop requests a `userCode`, the user approves it in the system browser on the real site (Turnstile-protected login unchanged), and the final poll sets the ordinary `ats_session` cookie in Electron's cookie jar with `client = 'desktop'`.
+- Options rejected and why: a second Turnstile widget (no `file://` origin), loading the hosted site in the window (remote content with `nodeIntegration`), skipping Turnstile for `runtime=electron` (spoofable).
+- Not implemented. Rollout: migration 010 + `server/deviceAuth.js` + routes → SPA `/device` + Devices panel → `electron/deviceLogin.js` + login panel → deploy (migrate required).

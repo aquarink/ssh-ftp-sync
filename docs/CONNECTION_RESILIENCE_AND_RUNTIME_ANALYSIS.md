@@ -431,3 +431,7 @@ widget is bound to the site's hostname, so it may not render inside a `file://`
 page. Either register a desktop-specific widget/hostname or give the desktop
 runtime its own first-party auth path (device token). That is an admin decision,
 not a client change.
+
+Update (2026-11-02): the device-token path is designed in
+`docs/DESKTOP_DEVICE_LOGIN_DESIGN.md` (device authorization flow, RFC 8628
+adapted; Turnstile untouched; desktop sessions revocable). Not implemented yet.
