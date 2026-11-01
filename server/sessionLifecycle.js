@@ -6,6 +6,9 @@ const SESSION_STATE = {
   CONNECTING: 'connecting',
   CONNECTED: 'connected',
   RECONNECTING: 'reconnecting',
+  // The shell is alive on the relay but no client socket is attached. The session
+  // waits for a resume for a bounded grace period and is then cleaned up.
+  DETACHED: 'detached',
   CLOSING: 'closing',
   CLOSED: 'closed',
   FAILED: 'failed',
@@ -14,6 +17,7 @@ const SESSION_STATE = {
 const DEFAULT_SESSION_SWEEPER_INTERVAL_MS = Number(process.env.SESSION_SWEEPER_INTERVAL_MS || 60000);
 const DEFAULT_STALE_PENDING_SESSION_MS = Number(process.env.STALE_PENDING_SESSION_MS || 120000);
 const DEFAULT_STALE_CONNECTED_SESSION_MS = Number(process.env.STALE_CONNECTED_SESSION_MS || 1800000);
+const DEFAULT_DETACHED_SESSION_GRACE_MS = Number(process.env.DETACHED_SESSION_GRACE_MS || 90000);
 
 const sessions = new Map();
 const metrics = {
@@ -24,6 +28,9 @@ const metrics = {
   cleanupDuplicateCalls: 0,
   staleSessionsCleaned: 0,
   reconnectAttempts: 0,
+  sessionsDetached: 0,
+  sessionsResumed: 0,
+  detachExpired: 0,
   cleanupErrors: 0,
 };
 
@@ -273,6 +280,41 @@ function markReconnectAttempt(sessionId) {
   return session;
 }
 
+function markDetached(sessionId, reason = 'transport_drop') {
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  session.state = SESSION_STATE.DETACHED;
+  session.detachedAt = nowIso();
+  session.detachReason = reason;
+  session.ws = null;
+  session.lastActivityAt = session.detachedAt;
+  metrics.sessionsDetached += 1;
+  logSessionEvent('detached', session, { result: 'ok' });
+  return session;
+}
+
+function markResumed(sessionId, ws = null) {
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  session.state = SESSION_STATE.CONNECTED;
+  session.resumedAt = nowIso();
+  session.detachedAt = null;
+  session.detachReason = null;
+  session.ws = ws;
+  session.lastActivityAt = session.resumedAt;
+  metrics.sessionsResumed += 1;
+  logSessionEvent('resumed', session, { result: 'ok' });
+  return session;
+}
+
+function markDetachExpired(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  metrics.detachExpired += 1;
+  logSessionEvent('detach-expired', session, { result: 'ok' });
+  return session;
+}
+
 function getSessionMetrics() {
   return { ...metrics };
 }
@@ -280,6 +322,12 @@ function getSessionMetrics() {
 function isSessionStale(session, now = Date.now()) {
   const createdAt = Date.parse(session.createdAt);
   const lastActivityAt = Date.parse(session.lastActivityAt || session.createdAt);
+  if (session.state === SESSION_STATE.DETACHED) {
+    // The relay's own grace timer normally ends a detached session; the sweeper is
+    // a safety net in case that timer was lost, so it allows some slack.
+    const detachedAt = Date.parse(session.detachedAt || session.lastActivityAt || session.createdAt);
+    return now - detachedAt > DEFAULT_DETACHED_SESSION_GRACE_MS * 2;
+  }
   if (session.state === SESSION_STATE.CREATING || session.state === SESSION_STATE.CONNECTING || session.state === SESSION_STATE.RESOLVING_IDENTITY || session.state === SESSION_STATE.RECONNECTING) {
     return now - Math.max(createdAt, lastActivityAt) > DEFAULT_STALE_PENDING_SESSION_MS;
   }
@@ -327,6 +375,7 @@ module.exports = {
   DEFAULT_SESSION_SWEEPER_INTERVAL_MS,
   DEFAULT_STALE_PENDING_SESSION_MS,
   DEFAULT_STALE_CONNECTED_SESSION_MS,
+  DEFAULT_DETACHED_SESSION_GRACE_MS,
   addListenerCleanup,
   addTimer,
   cleanupAllSessions,
@@ -335,7 +384,10 @@ module.exports = {
   createSession,
   getSession,
   getSessionMetrics,
+  markDetachExpired,
+  markDetached,
   markReconnectAttempt,
+  markResumed,
   startSessionSweeper,
   sweepStaleSessions,
   touchSession,

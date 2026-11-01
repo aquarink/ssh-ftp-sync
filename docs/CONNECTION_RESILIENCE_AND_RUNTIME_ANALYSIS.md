@@ -304,7 +304,7 @@ Electron ssh2 Client ──connect({ sock })──▶ WebSocket /api/tunnel?host
 |---|---|---|---|---|
 | 1 | Pong tracking + dead-peer detection — **done 2026-11-01** (`server/wsKeepalive.js`) | relay | ½ day | — |
 | 2 | Auto re-establish with backoff, Reconnect button, keep xterm buffer (Case B) — **done 2026-11-01** (`src/lib/reconnectPolicy.ts`, `TerminalView.tsx`) | both | 1 day | — |
-| 3 | Detach + resume with resume token and metrics (Case A) | relay | 2–3 days | 1 |
+| 3 | Detach + resume with resume token and metrics (Case A) — **done 2026-11-01** (`server/resumeToken.js`, `sshWebSocket.js`) | relay | 2–3 days | 1 |
 | 4 | Unified API origin + Electron same-origin shell + contextBridge hardening | desktop | 2 days | — |
 | 5 | Host `connectionPath` + reachability preflight + relay CIDR allowlist | both | 2 days | 4 |
 | 6 | Docs: replace Nginx/mobwn deployment notes with the Caddy/`ata.uinjakarta.id` topology | — | ½ day | — |

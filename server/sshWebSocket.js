@@ -5,25 +5,45 @@ const { resolveIdentity } = require('./identityResolver');
 const { isEphemeralCredentialExpired } = require('./ephemeralCredential');
 const { authorizeConnectRequest } = require('./accessPolicy');
 const {
+  SESSION_STATE,
+  DEFAULT_DETACHED_SESSION_GRACE_MS,
   addTimer,
   cleanupSession,
   createSession,
   getSession,
+  markDetachExpired,
+  markDetached,
   markReconnectAttempt,
+  markResumed,
   startSessionSweeper,
   touchSession,
   updateSession,
 } = require('./sessionLifecycle');
 const { logIdentityEvent } = require('./securityLog');
 const { DEFAULT_KEEPALIVE_INTERVAL_MS, createDeadPeerMonitor } = require('./wsKeepalive');
+const { consumeResumeToken, invalidateResumeTokens, issueResumeToken } = require('./resumeToken');
 
 const maxTerminalMessageBytes = 64 * 1024;
 const webSocketKeepaliveMs = DEFAULT_KEEPALIVE_INTERVAL_MS;
+// How much shell output is kept while a session is detached (no client attached),
+// so the gap between a transport drop and a resume can be replayed. Bounded so a
+// detached session cannot grow memory without limit.
+const outputBufferMaxBytes = Number(process.env.DETACHED_OUTPUT_BUFFER_BYTES || 256 * 1024);
+// Resume tokens outlive a single detach so the client can keep trying across the
+// grace window; the real bound on a detached session is the grace timer below, not
+// this TTL.
+const resumeTokenTtlMs = Number(process.env.RESUME_TOKEN_TTL_MS || 3_600_000);
+const detachGraceMs = DEFAULT_DETACHED_SESSION_GRACE_MS;
+
+// One controller per live relay session, keyed by sessionId. The controller owns the
+// ssh2 client and shell and survives the WebSocket, so a dropped socket can detach and
+// a later socket can resume the same shell.
+const controllers = new Map();
 
 startSessionSweeper();
 
 function send(ws, type, payload = {}) {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, ...payload }));
   }
 }
@@ -66,7 +86,7 @@ async function getAuthorizedConnection(req, url) {
     purpose: authorization.purpose,
     sessionId: url.searchParams.get('sessionId') || null,
   });
-  return { ...resolved, host: authorization.host };
+  return { ...resolved, host: authorization.host, user };
 }
 
 function readMessage(raw) {
@@ -95,16 +115,38 @@ function buildConnectConfig(host, material) {
   };
 }
 
-function connectShell(ws, resolved) {
+function bufferOutput(ctrl, chunk) {
+  ctrl.outputChunks.push(chunk);
+  ctrl.outputBytes += chunk.length;
+  while (ctrl.outputBytes > outputBufferMaxBytes && ctrl.outputChunks.length > 1) {
+    const dropped = ctrl.outputChunks.shift();
+    ctrl.outputBytes -= dropped.length;
+  }
+}
+
+function issueSessionResumeToken(ctrl) {
+  const { token, ttlMs } = issueResumeToken({
+    userId: ctrl.userId,
+    sessionId: ctrl.sessionId,
+    ttlMs: resumeTokenTtlMs,
+  });
+  return { resumeToken: token, resumeGraceSeconds: Math.round(detachGraceMs / 1000), resumeTtlSeconds: Math.round(ttlMs / 1000) };
+}
+
+function connectShell(initialWs, resolved) {
   const sessionId = resolved.ephemeralCredential?.sessionId || resolved.host?.id || resolved.hostId || `${Date.now()}`;
-  // A client that reconnects after a transport drop reuses its tab id as the session id.
-  // If the previous relay session has not been torn down yet (the server has not seen
-  // the old socket close), replace it instead of overwriting the map entry and leaking
-  // the old ssh2 client.
-  if (getSession(sessionId)) {
+
+  // A fresh connect for a sessionId that already has a controller replaces it: this
+  // covers a reconnect that reuses the tab id and a client that connects fresh instead
+  // of resuming a detached session.
+  const existingController = controllers.get(sessionId);
+  if (existingController) {
+    existingController.destroy('reconnect_replace');
+  } else if (getSession(sessionId)) {
     markReconnectAttempt(sessionId);
     cleanupSession(sessionId, 'reconnect_replace');
   }
+
   const session = createSession({
     sessionId,
     userId: resolved.userId,
@@ -112,25 +154,178 @@ function connectShell(ws, resolved) {
     credentialId: resolved.credential?.id || resolved.ephemeralCredential?.id || null,
     runtime: resolved.runtime,
     purpose: resolved.purpose,
-    state: 'connecting',
-    ws,
+    state: SESSION_STATE.CONNECTING,
+    ws: initialWs,
     hasClient: true,
   });
-  let cleaned = false;
-  // Handlers below belong to this session object only. After a reconnect_replace the
-  // map entry for sessionId points at a newer session, and a late close from the old
-  // ssh2 client must neither report to the new socket nor tear the new session down.
-  const isLive = () => !cleaned && getSession(sessionId) === session;
-  const cleanupOnce = (reason) => {
-    if (cleaned) return;
-    cleaned = true;
+
+  const ctrl = {
+    sessionId,
+    userId: resolved.userId,
+    session,
+    conn: new Client(),
+    stream: null,
+    ws: initialWs,
+    monitor: null,
+    graceTimer: null,
+    outputChunks: [],
+    outputBytes: 0,
+    reachedReady: false,
+    shellExited: false,
+    cleaned: false,
+    closeNotified: false,
+  };
+  controllers.set(sessionId, ctrl);
+
+  const isLive = () => !ctrl.cleaned && getSession(sessionId) === session;
+
+  ctrl.destroy = (reason) => {
+    if (ctrl.cleaned) return;
+    ctrl.cleaned = true;
+    if (ctrl.monitor) ctrl.monitor.stop();
+    if (ctrl.graceTimer) {
+      clearTimeout(ctrl.graceTimer);
+      ctrl.graceTimer = null;
+    }
+    if (controllers.get(sessionId) === ctrl) controllers.delete(sessionId);
+    invalidateResumeTokens({ sessionId }, reason || 'closed');
     if (getSession(sessionId) === session) {
       cleanupSession(sessionId, reason);
     }
   };
 
+  const notifyClosed = (reason, retryable) => {
+    if (ctrl.closeNotified) return;
+    ctrl.closeNotified = true;
+    send(ctrl.ws, 'closed', { reason, retryable: Boolean(retryable) });
+  };
+  const notifyError = (message, reason, retryable) => {
+    if (ctrl.closeNotified) return;
+    ctrl.closeNotified = true;
+    send(ctrl.ws, 'error', { message, reason, retryable: Boolean(retryable) });
+  };
+
+  // Hold a shell whose client went away, instead of tearing it down, for a bounded
+  // grace period. The ssh2 connection stays open and output is buffered for replay.
+  const detach = (reason) => {
+    if (ctrl.cleaned || ctrl.session.state === SESSION_STATE.DETACHED) return;
+    if (!ctrl.reachedReady || ctrl.shellExited) {
+      // Nothing resumable: no shell ever existed, or it exited cleanly.
+      ctrl.destroy(reason);
+      return;
+    }
+    if (ctrl.monitor) {
+      ctrl.monitor.stop();
+      ctrl.monitor = null;
+    }
+    ctrl.ws = null;
+    ctrl.closeNotified = false;
+    markDetached(sessionId, reason);
+    ctrl.graceTimer = setTimeout(() => {
+      ctrl.graceTimer = null;
+      if (ctrl.session.state === SESSION_STATE.DETACHED) {
+        markDetachExpired(sessionId);
+        ctrl.destroy('detached_expired');
+      }
+    }, detachGraceMs);
+    if (typeof ctrl.graceTimer.unref === 'function') ctrl.graceTimer.unref();
+  };
+
+  const onWsClose = (closingWs) => {
+    if (ctrl.ws !== closingWs) return; // a stale socket we already replaced
+    if (ctrl.cleaned) return;
+    // A transport drop with a live shell detaches; anything else tears down.
+    detach('ws_close');
+  };
+
+  const attachWs = (ws) => {
+    ctrl.ws = ws;
+    ctrl.monitor = createDeadPeerMonitor(ws, {
+      intervalMs: webSocketKeepaliveMs,
+      onTick: () => send(ws, 'keepalive'),
+      onDead: () => {
+        // The client stopped answering pings; drop the socket so the grace/detach
+        // path runs instead of holding a half-open connection.
+        try {
+          ws.terminate();
+        } catch {
+          // Best effort.
+        }
+      },
+    });
+    addTimer(sessionId, ctrl.monitor.timer, 'keepalive');
+
+    ws.on('message', (raw) => {
+      try {
+        if (!isLive()) return;
+        const message = readMessage(raw);
+        if (message.type === 'input' && ctrl.stream && typeof message.data === 'string') {
+          ctrl.stream.write(message.data);
+          touchSession(sessionId);
+        }
+        if (message.type === 'resize' && ctrl.stream) {
+          const cols = Number(message.cols);
+          const rows = Number(message.rows);
+          if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
+            ctrl.stream.setWindow(rows, cols, 480, 640);
+            touchSession(sessionId);
+          }
+        }
+        if (message.type === 'disconnect') {
+          notifyClosed('explicit_disconnect', false);
+          ctrl.destroy('explicit_disconnect');
+          try { ws.close(); } catch { /* ignore */ }
+          return;
+        }
+        if (message.type === 'activity') {
+          touchSession(sessionId);
+        }
+      } catch (error) {
+        send(ctrl.ws, 'error', { message: error.message });
+      }
+    });
+
+    ws.once('close', () => onWsClose(ws));
+    ws.once('error', () => onWsClose(ws));
+  };
+
+  // Attach the shell output handlers once; they follow the controller's current ws
+  // and buffer output while detached.
+  const wireStream = (shell) => {
+    ctrl.stream = shell;
+    ctrl.reachedReady = true;
+    updateSession(sessionId, { stream: shell, state: SESSION_STATE.CONNECTED, hasStream: true, hasClient: true, updatedAt: new Date().toISOString() });
+    const resumeInfo = issueSessionResumeToken(ctrl);
+    send(ctrl.ws, 'connected', { sessionId, ...resumeInfo });
+
+    shell.on('data', (data) => {
+      if (ctrl.cleaned) return;
+      touchSession(sessionId);
+      if (ctrl.ws && ctrl.ws.readyState === WebSocket.OPEN) {
+        send(ctrl.ws, 'data', { data: data.toString('utf8') });
+      } else {
+        bufferOutput(ctrl, Buffer.from(data));
+      }
+    });
+    shell.once('exit', () => {
+      ctrl.shellExited = true;
+    });
+    shell.once('close', () => {
+      if (ctrl.cleaned) return;
+      notifyClosed(ctrl.shellExited ? 'shell_exit' : 'stream_close', !ctrl.shellExited);
+      try { if (ctrl.ws) ctrl.ws.close(); } catch { /* ignore */ }
+      ctrl.destroy('stream_close');
+    });
+    shell.once('error', (streamError) => {
+      if (ctrl.cleaned) return;
+      notifyError(streamError.message, 'stream_error', true);
+      try { if (ctrl.ws) ctrl.ws.close(); } catch { /* ignore */ }
+      ctrl.destroy('stream_error');
+    });
+  };
+
   if (!resolved.ephemeralCredential) {
-    cleanupOnce('credential_unavailable');
+    ctrl.destroy('credential_unavailable');
     throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
   }
   if (isEphemeralCredentialExpired(resolved.ephemeralCredential)) {
@@ -146,122 +341,33 @@ function connectShell(ws, resolved) {
       result: 'error',
       timestamp: new Date().toISOString(),
     });
-    cleanupOnce('credential_expired');
+    ctrl.destroy('credential_expired');
     throw Object.assign(new Error('Credential secret unavailable'), { status: 400 });
   }
 
-  const conn = new Client();
-  let stream = null;
-  // Connection outcome tracking, used to tell the client whether a retry makes sense:
-  // a drop after the shell was ready is retryable, a failure before ready (auth,
-  // policy, unreachable host) is not.
-  let reachedReady = false;
-  let shellExited = false;
-  let closeNotified = false;
-  const notifyClosed = (reason, retryable) => {
-    if (closeNotified) return;
-    closeNotified = true;
-    send(ws, 'closed', { reason, retryable: Boolean(retryable) });
-  };
-  const notifyError = (message, reason, retryable) => {
-    if (closeNotified) return;
-    closeNotified = true;
-    send(ws, 'error', { message, reason, retryable: Boolean(retryable) });
-  };
-
-  const monitor = createDeadPeerMonitor(ws, {
-    intervalMs: webSocketKeepaliveMs,
-    onTick: () => send(ws, 'keepalive'),
-    onDead: () => {
-      // The client stopped answering pings. Terminate so the TCP half-open state does
-      // not keep the ssh2 session alive until the kernel gives up.
-      try {
-        ws.terminate();
-      } catch {
-        // Best effort.
-      }
-      cleanupOnce('ws_dead_peer');
-    },
-  });
-  addTimer(sessionId, monitor.timer, 'keepalive');
+  const conn = ctrl.conn;
   session.conn = conn;
   session.updatedAt = new Date().toISOString();
 
-  ws.on('message', (raw) => {
-    try {
-      if (!isLive()) return;
-      const message = readMessage(raw);
-      if (message.type === 'input' && stream && typeof message.data === 'string') {
-        stream.write(message.data);
-        touchSession(sessionId);
-      }
-      if (message.type === 'resize' && stream) {
-        const cols = Number(message.cols);
-        const rows = Number(message.rows);
-        if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
-          stream.setWindow(rows, cols, 480, 640);
-          touchSession(sessionId);
-        }
-      }
-      if (message.type === 'disconnect') {
-        cleanupOnce('explicit_disconnect');
-        ws.close();
-        return;
-      }
-      if (message.type === 'activity') {
-        touchSession(sessionId);
-      }
-    } catch (error) {
-      send(ws, 'error', { message: error.message });
-    }
-  });
-
-  ws.once('close', () => cleanupOnce('ws_close'));
-  ws.once('error', () => cleanupOnce('ws_error'));
+  attachWs(initialWs);
 
   conn.once('ready', () => {
     if (!isLive()) return;
-    updateSession(sessionId, { state: 'connected', connectedAt: new Date().toISOString(), hasClient: true, hasStream: true, stream: null });
+    updateSession(sessionId, { state: SESSION_STATE.CONNECTED, connectedAt: new Date().toISOString(), hasClient: true, hasStream: true });
     conn.shell({ term: 'xterm-256color' }, (error, shell) => {
       if (!isLive()) return;
       if (error) {
         notifyError(error.message, 'shell_error', false);
-        ws.close();
-        cleanupOnce('shell_error');
+        try { if (ctrl.ws) ctrl.ws.close(); } catch { /* ignore */ }
+        ctrl.destroy('shell_error');
         return;
       }
-
-      stream = shell;
-      reachedReady = true;
-      updateSession(sessionId, { stream: shell, state: 'connected', hasStream: true, hasClient: true, updatedAt: new Date().toISOString() });
-      send(ws, 'connected', { sessionId });
-      stream.on('data', (data) => {
-        if (!isLive()) return;
-        touchSession(sessionId);
-        send(ws, 'data', { data: data.toString('utf8') });
-      });
-      stream.once('exit', () => {
-        // The remote shell ended on its own (user typed `exit`, or the host killed it).
-        // That is a clean close, not a drop, so the client must not auto-reconnect.
-        shellExited = true;
-      });
-      stream.once('close', () => {
-        if (!isLive()) return;
-        notifyClosed(shellExited ? 'shell_exit' : 'stream_close', !shellExited);
-        ws.close();
-        cleanupOnce('stream_close');
-      });
-      stream.once('error', (streamError) => {
-        if (!isLive()) return;
-        notifyError(streamError.message, 'stream_error', true);
-        ws.close();
-        cleanupOnce('stream_error');
-      });
+      wireStream(shell);
     });
   });
   conn.once('error', (error) => {
-    if (!isLive()) return;
-    const retryable = reachedReady && !shellExited;
+    if (ctrl.cleaned) return;
+    const retryable = ctrl.reachedReady && !ctrl.shellExited;
     notifyError(
       retryable ? `Connection lost: ${error.message}` : 'Connection failed after credential resolution',
       retryable ? 'client_error' : 'connect_error',
@@ -278,21 +384,40 @@ function connectShell(ws, resolved) {
       result: 'error',
       timestamp: new Date().toISOString(),
     });
-    ws.close();
-    cleanupOnce('client_error');
+    try { if (ctrl.ws) ctrl.ws.close(); } catch { /* ignore */ }
+    ctrl.destroy('client_error');
   });
   conn.once('end', () => {
-    if (!isLive()) return;
-    notifyClosed(shellExited ? 'shell_exit' : 'client_end', reachedReady && !shellExited);
-    ws.close();
-    cleanupOnce('client_end');
+    if (ctrl.cleaned) return;
+    notifyClosed(ctrl.shellExited ? 'shell_exit' : 'client_end', ctrl.reachedReady && !ctrl.shellExited);
+    try { if (ctrl.ws) ctrl.ws.close(); } catch { /* ignore */ }
+    ctrl.destroy('client_end');
   });
   conn.once('close', () => {
-    if (!isLive()) return;
-    notifyClosed(shellExited ? 'shell_exit' : 'client_close', reachedReady && !shellExited);
-    ws.close();
-    cleanupOnce('client_close');
+    if (ctrl.cleaned) return;
+    notifyClosed(ctrl.shellExited ? 'shell_exit' : 'client_close', ctrl.reachedReady && !ctrl.shellExited);
+    try { if (ctrl.ws) ctrl.ws.close(); } catch { /* ignore */ }
+    ctrl.destroy('client_close');
   });
+
+  ctrl.resume = (ws) => {
+    markResumed(sessionId, ws);
+    if (ctrl.graceTimer) {
+      clearTimeout(ctrl.graceTimer);
+      ctrl.graceTimer = null;
+    }
+    ctrl.closeNotified = false;
+    attachWs(ws);
+    const resumeInfo = issueSessionResumeToken(ctrl);
+    send(ws, 'resumed', { sessionId, ...resumeInfo });
+    // Replay output buffered during the detach so the terminal catches up.
+    if (ctrl.outputBytes > 0) {
+      const replay = Buffer.concat(ctrl.outputChunks).toString('utf8');
+      ctrl.outputChunks = [];
+      ctrl.outputBytes = 0;
+      send(ws, 'data', { data: replay });
+    }
+  };
 
   const connectConfig = buildConnectConfig(resolved.host, resolved.ephemeralCredential.material);
   try {
@@ -309,7 +434,7 @@ function connectShell(ws, resolved) {
     });
     conn.connect(connectConfig);
   } catch (error) {
-    cleanupOnce('connect_throw');
+    ctrl.destroy('connect_throw');
     throw error;
   } finally {
     const cleared = resolved.ephemeralCredential.clear();
@@ -327,6 +452,28 @@ function connectShell(ws, resolved) {
   }
 }
 
+async function resumeSession(req, url) {
+  const user = await getSessionUser(req);
+  if (!user) throw Object.assign(new Error('Authentication required'), { status: 401 });
+
+  const sessionId = url.searchParams.get('resume');
+  const resumeToken = url.searchParams.get('resumeToken') || url.searchParams.get('token');
+  if (!sessionId || !resumeToken) {
+    throw Object.assign(new Error('Resume authorization required'), { status: 400 });
+  }
+
+  const ctrl = controllers.get(sessionId);
+  const session = getSession(sessionId);
+  // Validate the session is resumable before consuming the one-time token, so a
+  // token is not burned when there is nothing to resume.
+  if (!ctrl || !session || session.userId !== user.id || session.state !== SESSION_STATE.DETACHED) {
+    throw Object.assign(new Error('Session is not resumable'), { status: 409 });
+  }
+
+  consumeResumeToken(resumeToken, { userId: user.id, sessionId });
+  return ctrl;
+}
+
 function attachSshWebSocket(server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: maxTerminalMessageBytes });
 
@@ -334,6 +481,22 @@ function attachSshWebSocket(server) {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname !== '/api/ssh') {
       rejectUpgrade(socket, 404, 'Not found');
+      return;
+    }
+
+    if (url.searchParams.get('resume')) {
+      resumeSession(req, url)
+        .then((ctrl) => {
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            try {
+              ctrl.resume(ws);
+            } catch (error) {
+              send(ws, 'error', { message: error.message, reason: 'resume_failed', retryable: true });
+              ws.close();
+            }
+          });
+        })
+        .catch((error) => rejectUpgrade(socket, error.status || 500, error.message || 'Resume unavailable'));
       return;
     }
 

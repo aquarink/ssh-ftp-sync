@@ -1,0 +1,68 @@
+{
+  "ranAt": "2026-11-01T02:48:10.858Z",
+  "total": 12,
+  "passed": 12,
+  "failed": 0,
+  "results": [
+    {
+      "name": "connect yields a resume token",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "session is connected",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "abrupt drop detaches the shell",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "resume issues a fresh token",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "buffered output is replayed on resume",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "session is connected again",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "explicit disconnect tears the session down",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "a consumed resume token cannot be reused",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "another user is refused resume",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "session detached before grace",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "detached session is cleaned up after grace",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "detachExpired metric incremented",
+      "ok": true,
+      "detail": null
+    }
+  ]
+}

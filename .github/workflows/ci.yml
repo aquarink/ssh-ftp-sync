@@ -22,5 +22,9 @@ jobs:
         run: npx tsc --noEmit
       - name: Lint (ESLint)
         run: npx eslint src --ext .ts,.tsx || true
+      - name: Unit tests (Jest)
+        run: npx jest server
       - name: Run mock integration tests
         run: node scripts/integration/mock-ssh-test.js
+      - name: Relay detach/resume integration test
+        run: node scripts/integration/relay-resume-test.js

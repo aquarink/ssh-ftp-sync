@@ -731,3 +731,51 @@ Verification:
 - `server/__tests__/wsKeepalive.test.js` (4 tests) and the existing suites pass; `tsc --noEmit`
   is clean. The reconnect schedule and stop conditions were checked with a scripted run of the
   compiled policy module.
+
+## Phase 2.2 — Session Detach & Resume (connection continuity)
+
+Analysis: `docs/CONNECTION_RESILIENCE_AND_RUNTIME_ANALYSIS.md` section 2.4 (case A).
+
+What was built:
+
+- The browser relay now holds a shell whose client went away instead of tearing it down.
+  On an abnormal WebSocket close of a ready shell, the session moves to a new `DETACHED`
+  state (`server/sessionLifecycle.js`): the ssh2 connection and shell stay open, output is
+  buffered into a bounded ring (default 256 KiB), and a grace timer (default 90 s,
+  `DETACHED_SESSION_GRACE_MS`) cleans the session up if no client returns.
+- `server/sshWebSocket.js` was restructured around a per-session controller that owns the ssh2
+  client/shell and survives individual sockets, so a later socket can re-attach. The shell
+  output handlers follow the controller's current socket and buffer while detached.
+- Resume authorization (`server/resumeToken.js`): a one-time, HMAC-signed resume token scoped to
+  userId + sessionId is issued while connected (delivered in the `connected` message) and
+  reissued on each resume (`resumed` message). A resume upgrade at
+  `/api/ssh?resume=<sessionId>&resumeToken=<token>` validates the token and that the session is
+  the caller's own and currently `DETACHED`, then replays the buffered output.
+- Client (`src/components/TerminalView.tsx`): on a drop it tries resume first (no connect token),
+  and only falls back to a fresh connect (case B) if the resume socket closes before re-attaching
+  (token expired, grace elapsed, relay restarted). The resume path is browser-only, since the
+  Electron runtime has no transport between the UI and the SSH client.
+- New session metrics `sessionsDetached`, `sessionsResumed`, `detachExpired` for evaluation.
+
+Security decision:
+
+- A `DETACHED` session is an authenticated shell with no client attached, which relaxes the
+  Phase 1.4 "deterministic teardown" guarantee by a bounded, logged, user-scoped grace window.
+  Mitigations: the grace bound itself, a one-time resume token that cannot be replayed or used by
+  another user, output buffer cap, user-scoped cleanup, and access-log events
+  (`resumeTokenIssued`/`Validated`/`Rejected`, session `detached`/`resumed`/`detach-expired`).
+- Resume needs no credential resolution: it re-attaches an already authenticated shell and never
+  touches secret material.
+
+Verification:
+
+- `scripts/integration/relay-resume-test.js` (12 checks) drives a mock SSH server and the real
+  relay through connect → drop → detach → output-while-detached → resume → replay, plus token
+  reuse, cross-user refusal, and grace expiry. `server/__tests__/resumeToken.test.js` (8 tests)
+  covers the token. `tsc --noEmit` is clean and the frontend build passes. Added to CI.
+
+Limitations:
+
+- Resume is browser-relay only (case A). The Electron and fresh-connect paths still use the
+  Phase 2.1 re-establish behavior (case B).
+- Still needs live verification against the Caddy/WireGuard production path.

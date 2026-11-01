@@ -48,11 +48,14 @@ interface TerminalViewProps {
 }
 
 type SshSocketMessage = {
-  type: 'connected' | 'closed' | 'error' | 'data' | 'keepalive';
+  type: 'connected' | 'resumed' | 'closed' | 'error' | 'data' | 'keepalive';
   message?: string;
   data?: string;
   reason?: string;
   retryable?: boolean;
+  sessionId?: string;
+  resumeToken?: string;
+  resumeGraceSeconds?: number;
 };
 
 type IpcLifecyclePayload = {
@@ -192,6 +195,11 @@ export function TerminalView({
     let watchdogTimer: number | null = null;
     let waitingForOnline = false;
     let consumeTokenTimer: number | null = null;
+    // Resume state: the relay hands out a resume token while connected so a dropped
+    // socket can re-attach to the same still-running shell within the grace window,
+    // instead of opening a brand new shell.
+    let resumeToken: string | null = null;
+    let resumeDeadline = 0;
 
     const writeStatus = (text: string) => {
       term.current?.write(`\r\n\x1b[2m[${text}]\x1b[0m\r\n`);
@@ -263,6 +271,14 @@ export function TerminalView({
 
     terminalRef.current.addEventListener('paste', handlePasteEvent, true);
 
+    const storeResumeInfo = (message: SshSocketMessage) => {
+      if (message.resumeToken) {
+        resumeToken = message.resumeToken;
+        const graceMs = Math.max(0, Number(message.resumeGraceSeconds || 0) * 1000);
+        resumeDeadline = graceMs > 0 ? Date.now() + graceMs : 0;
+      }
+    };
+
     const markConnected = () => {
       everConnected = true;
       attempts = 0;
@@ -271,6 +287,9 @@ export function TerminalView({
       // The server shell may have been created with default dimensions; sync them.
       sendResize();
     };
+
+    const canResume = () =>
+      runtime === 'browser' && resumeToken !== null && (resumeDeadline === 0 || Date.now() < resumeDeadline);
 
     const finish = (decision: Extract<ReconnectDecision, { action: 'stop' }>, info: ConnectionCloseInfo) => {
       if (decision.final === 'closed') {
@@ -311,13 +330,19 @@ export function TerminalView({
       finish(decision, info);
     };
 
-    const openSocket = (token: string) => {
+    const openSocket = (options: { token: string } | { resume: string }) => {
       const generation = ++socketGeneration;
+      const isResume = 'resume' in options;
       const socketUrl = new URL(sshSocketUrl(hostId, sessionId));
-      socketUrl.searchParams.set('connectToken', token);
-      if (host?.credentialId) socketUrl.searchParams.set('credentialId', host.credentialId);
-      if (host?.authType) socketUrl.searchParams.set('authType', host.authType);
-      socketUrl.searchParams.set('purpose', 'ssh');
+      if (isResume) {
+        socketUrl.searchParams.set('resume', sessionId);
+        socketUrl.searchParams.set('resumeToken', options.resume);
+      } else {
+        socketUrl.searchParams.set('connectToken', options.token);
+        if (host?.credentialId) socketUrl.searchParams.set('credentialId', host.credentialId);
+        if (host?.authType) socketUrl.searchParams.set('authType', host.authType);
+        socketUrl.searchParams.set('purpose', 'ssh');
+      }
 
       const ws = new WebSocket(socketUrl.toString());
       socket = ws;
@@ -332,6 +357,13 @@ export function TerminalView({
           switch (message.type) {
             case 'connected':
               connectedThisSocket = true;
+              storeResumeInfo(message);
+              markConnected();
+              break;
+            case 'resumed':
+              connectedThisSocket = true;
+              storeResumeInfo(message);
+              writeStatus('reconnected to the existing session');
               markConnected();
               break;
             case 'data':
@@ -366,6 +398,15 @@ export function TerminalView({
       ws.onclose = (event) => {
         if (generation !== socketGeneration || disposed) return;
         clearWatchdog();
+        // A resume attempt that never re-attached (token expired, grace elapsed, or the
+        // relay was restarted) is not a real drop: fall back to a fresh connect without
+        // spending a reconnect attempt.
+        if (isResume && !connectedThisSocket) {
+          resumeToken = null;
+          resumeDeadline = 0;
+          void connect(null);
+          return;
+        }
         const info: ConnectionCloseInfo = serverOutcome ?? {
           reason: event.code === WATCHDOG_CLOSE_CODE ? 'watchdog' : 'transport',
           // A transport drop is only worth retrying once a shell has existed; a socket
@@ -397,6 +438,13 @@ export function TerminalView({
 
     const connect = async (token: string | null) => {
       if (disposed) return;
+      // Prefer resuming the running shell over opening a new one. A resume needs no
+      // connect token; if it fails the socket's onclose falls back here for a fresh one.
+      if (!token && canResume()) {
+        const resume = resumeToken as string;
+        openSocket({ resume });
+        return;
+      }
       try {
         let effectiveToken = token;
         if (!effectiveToken) {
@@ -415,7 +463,7 @@ export function TerminalView({
         if (runtime === 'electron') {
           sendElectronConnect(effectiveToken);
         } else {
-          openSocket(effectiveToken);
+          openSocket({ token: effectiveToken });
         }
       } catch (error) {
         if (disposed) return;
