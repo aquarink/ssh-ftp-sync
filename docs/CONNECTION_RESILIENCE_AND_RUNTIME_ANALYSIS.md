@@ -349,3 +349,44 @@ the `stale:` checks in `scripts/integration/relay-resume-test.js` (19/19).
 Timing consequence: the 90 s grace runs from the moment the relay *detects* the drop, so
 the effective resume window after a silent drop is ≈ 50 s (detection) + 90 s (grace).
 A future tuning knob is `WS_KEEPALIVE_INTERVAL_MS` (25 s) × `WS_MAX_MISSED_PONGS` (2).
+
+## Addendum (2026-11-01): runtime VPN awareness (Electron)
+
+The research question "can the app recognise the computer's VPN, or carry its own?"
+splits into two different things.
+
+**Awareness** — observing VPN state and reachability.
+- Browser runtime: not possible in any reliable way. Browsers deliberately hide
+  interfaces, routes and VPN state; WebRTC local-IP leaks are closed and Chrome is
+  gating local-network probing behind the Local Network Access permission. The only
+  signal is server-side (the client's source IP), and through `ata.uinjakarta.id`
+  the browser always arrives from the public internet.
+- Electron runtime: straightforward. The Node main process can read
+  `os.networkInterfaces()` and open a TCP probe. Implemented in
+  `electron/networkAwareness.js` (read-only, no privileges) and exposed over the
+  `network-assess` IPC channel. It reports the VPN-style interfaces that are up
+  (`utun*`, `wg*`, `tun*`, "WireGuard Tunnel", …), whether the target accepts a TCP
+  connection, and a hint: `reachable`, `unreachable`, `vpn_required` (private target,
+  no VPN interface), `vpn_route_missing` (VPN up but its subnet does not cover the
+  target — the exact failure seen on 2026-11-01, where the laptop's tunnel was up
+  but `10.88.0.0/24` was not routed) or `dns_failed`. The UI shows the one-line
+  summary while connecting and the hint-specific advice on a failed connect.
+  Known limit: tunnels that report a `/32` (common on Windows WireGuard) cannot be
+  matched to the target's subnet, so an unreachable target there reads as
+  `vpn_route_missing`; wording keeps it a hint, not a verdict.
+
+**Embedding** — making the runtime a VPN peer.
+- Browser: impossible (no raw UDP, no TUN). The relay already acts as a bastion
+  inside the VPN, which is why the browser runtime reaches `10.88.0.x` without the
+  laptop being on VPN. WireGuard-in-WASM over WebSocket (as in Tailscale's
+  `tsconnect`) exists but is a large project with no gain here.
+- Electron: possible but expensive. Creating a TUN device needs privileges (root or
+  a signed Network Extension on macOS, an admin-installed driver on Windows,
+  `CAP_NET_ADMIN` on Linux), i.e. shipping a full VPN client with its security and
+  distribution burden.
+
+Recommended tiers: (1) awareness — done; (2) Electron through the hosted relay when
+the target is unreachable directly (needs the cookie/origin mismatch fixed);
+(3) a launcher that activates the OS's existing WireGuard tunnel; (4) embedded
+WireGuard only as a chapter on limits, not as a feature. The thesis framing is
+"VPN awareness + bastion" versus "VPN embedding".

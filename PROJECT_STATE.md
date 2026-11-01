@@ -819,3 +819,8 @@ Limitations:
 - Why: behind the production edge proxy (browser → Caddy 38.47.180.2 → WireGuard → VM) the relay only notices a silent client drop after ~50 s of missed pongs, so short drops were refused with 409 and fell back to a fresh shell.
 - Trust boundary unchanged: one-time, user+session-bound resume token plus the user's own auth cookie.
 - Tests: `scripts/integration/relay-resume-test.js` 19/19 (7 new `stale:` checks); Jest server suite 134/134.
+
+### Phase 2.4 — Runtime VPN awareness in Electron (2026-11-01)
+- New `electron/networkAwareness.js` (pure Node, unit tested): classifies VPN-style interfaces, resolves + TCP-probes the target, returns a hint (`reachable` / `unreachable` / `vpn_required` / `vpn_route_missing` / `dns_failed`). Registered as the read-only `network-assess` IPC channel from `sshHandler.js`.
+- Renderer: `src/lib/networkAwareness.ts` wrapper; `App.tsx` runs the check on connect and reconnect (Electron only) and shows a VPN + reachability line while connecting and hint-specific advice on a failed connect.
+- Browser runtime unchanged: it cannot observe VPN state and relies on the relay as a bastion. Design notes in `docs/CONNECTION_RESILIENCE_AND_RUNTIME_ANALYSIS.md`.

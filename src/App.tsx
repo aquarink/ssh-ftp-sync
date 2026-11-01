@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw, WifiOff } from 'lucide-react';
+import { assessConnectivity, adviceFor, describeTarget, describeVpn, type ConnectivityAssessment } from './lib/networkAwareness';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
@@ -22,11 +23,37 @@ interface SshTab {
   /** Incremented to ask the terminal for an immediate manual reconnect. */
   reconnectNonce?: number;
   reconnectInfo?: { attempt: number; maxAttempts: number; delayMs: number };
+  /** Electron only: VPN + target reachability observed around connect/reconnect. */
+  networkInfo?: ConnectivityAssessment | null;
+  networkChecking?: boolean;
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE = 14;
 const MIN_TERMINAL_FONT_SIZE = 8;
 const MAX_TERMINAL_FONT_SIZE = 40;
+
+/** Electron only: one-line VPN + reachability summary shown while connecting or after a failure. */
+function NetworkStatusLine({ info, checking, withAdvice = false }: {
+  info?: ConnectivityAssessment | null;
+  checking?: boolean;
+  withAdvice?: boolean;
+}) {
+  if (checking && !info) {
+    return <span className="text-xs text-textMuted/80">Checking VPN and target reachability...</span>;
+  }
+  if (!info) return null;
+  const ok = info.target.reachable;
+  const advice = withAdvice ? adviceFor(info) : null;
+  return (
+    <div className={`flex flex-col items-center gap-1 text-xs ${ok ? 'text-textMuted' : 'text-yellow-200'}`}>
+      <span className="inline-flex items-center gap-1.5">
+        {info.vpn.active ? <ShieldCheck size={12} className="shrink-0" /> : <WifiOff size={12} className="shrink-0" />}
+        {describeVpn(info)} · {describeTarget(info)}
+      </span>
+      {advice && <span className="max-w-md text-center opacity-90">{advice}</span>}
+    </div>
+  );
+}
 const DEFAULT_TERMINAL_BOTTOM_PADDING_PX = 32;
 
 function App() {
@@ -663,6 +690,16 @@ function App() {
     }
   };
 
+  // Electron only: observe VPN state and target reachability so a failed connect
+  // can explain itself (e.g. "no VPN interface is active") instead of a bare timeout.
+  const refreshNetworkInfo = (tabId: string, host: Host) => {
+    if (!window.ipcRenderer) return;
+    updateTab(tabId, { networkChecking: true });
+    void assessConnectivity(host.host, host.port).then((info) => {
+      updateTab(tabId, { networkInfo: info, networkChecking: false });
+    });
+  };
+
   const connectToHost = async (host: Host) => {
     try {
       const tabId = crypto.randomUUID();
@@ -685,6 +722,7 @@ function App() {
       };
       setSshTabs(tabs => [...tabs, tab]);
       setActiveTabId(tabId);
+      refreshNetworkInfo(tabId, host);
     } catch (error) {
       alert((error instanceof Error ? error.message : String(error)) || 'Unable to authorize SSH connect');
     }
@@ -706,6 +744,8 @@ function App() {
   };
 
   const reconnectTab = (tabId: string) => {
+    const current = sshTabs.find(tab => tab.id === tabId);
+    if (current) refreshNetworkInfo(tabId, current.host);
     setSshTabs(tabs => tabs.map(tab => tab.id === tabId
       ? { ...tab, status: 'connecting', errorMsg: '', reconnectInfo: undefined, reconnectNonce: (tab.reconnectNonce || 0) + 1 }
       : tab));
@@ -1221,6 +1261,9 @@ function App() {
                       <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10 flex-col space-y-3">
                         <Loader2 size={32} className="text-primary animate-spin" />
                         <span className="text-sm text-textMuted">Connecting to {tab.hostname}...</span>
+                        {window.ipcRenderer && (
+                          <NetworkStatusLine info={tab.networkInfo} checking={tab.networkChecking} />
+                        )}
                       </div>
                     )}
                     {tab.status === 'reconnecting' && (
@@ -1244,6 +1287,11 @@ function App() {
                         <div className={`p-4 rounded-lg max-w-md text-center border ${tab.status === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-white/5 text-textMuted border-border'}`}>
                           <h3 className="font-semibold mb-2">{tab.status === 'error' ? 'Connection Failed' : 'Session Ended'}</h3>
                           <p className="text-sm opacity-80">{tab.errorMsg}</p>
+                          {window.ipcRenderer && tab.status === 'error' && (
+                            <div className="mt-3">
+                              <NetworkStatusLine info={tab.networkInfo} checking={tab.networkChecking} withAdvice />
+                            </div>
+                          )}
                           <button
                             type="button"
                             onClick={() => reconnectTab(tab.id)}

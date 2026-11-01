@@ -15,10 +15,15 @@ const {
   getSessionMetrics,
 } = require('./sessionLifecycle');
 const { logIdentityEvent, logVaultEvent } = require('./securityLog');
+const { registerNetworkAwarenessIpc } = require('./networkAwareness');
 
 const terminalSessions = new TerminalSessionManager();
 let activeUserId = null;
 const apiPort = Number(process.env.API_PORT || 8790);
+
+// Electron-only runtime awareness: VPN interface + target reachability. Read-only,
+// so a failed connect can explain itself ("no VPN interface is active").
+registerNetworkAwarenessIpc(ipcMain);
 
 async function consumeConnectToken(payload) {
   const response = await fetch(`http://127.0.0.1:${apiPort}/api/security/connect-token/consume`, {
