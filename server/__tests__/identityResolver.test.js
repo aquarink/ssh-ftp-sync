@@ -26,8 +26,15 @@ const { readCredentialSecret } = require('../credentialStore');
 const { logIdentityEvent } = require('../securityLog');
 
 describe('server/identityResolver - Security & Behavior Tests', () => {
+  const originalEnv = process.env;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env = { ...originalEnv, ENABLE_OS_SSH_AGENT: 'true' };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
   });
 
   describe('Utility/Error Exports', () => {

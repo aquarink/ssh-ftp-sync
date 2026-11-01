@@ -20,6 +20,27 @@ Ant Tech Async is a playful working name for async remote operations. It is not 
 - A single repository that contains the frontend, backend API, and Electron desktop shell.
 - A research-oriented security project that implements identity scoping, secure secret storage, key isolation, session cleanup, and zero-trust access.
 - A Node.js backend is part of the project. It is not a separate external service.
+- **Fully standalone**: Ant Tech Async uses an embedded/library SSH runtime and does not require OpenSSH CLI, ssh-agent, ssh-add, or system scp/sftp binaries on the user machine.
+
+## Standalone Runtime Safety
+
+The SSH/SFTP runtime must remain independent from OS-level OpenSSH tooling.
+
+- SSH and SFTP connections use the application runtime and `ssh2`; they must not spawn `ssh`, `scp`, `sftp`, `ssh-add`, or other OpenSSH CLI processes.
+- `npm run test` runs `server/__tests__/sshSpawningGuard.test.js` by default. CI must block merges if this guard fails.
+- `ENABLE_OS_SSH_AGENT` defaults to disabled. OS `ssh-agent` support is optional compatibility mode only.
+- Production deployments must not enable `ENABLE_OS_SSH_AGENT=true` unless the operator explicitly accepts the risk of delegating authentication to the host OS agent.
+- The application must not automatically scan, list, or load `~/.ssh`; identities must be explicitly saved or assigned through the app.
+- `SSH_AUTH_SOCK` must be ignored unless `ENABLE_OS_SSH_AGENT=true`.
+
+Manual verification checklist before treating a release as standalone-runtime ready:
+
+- [ ] Test on a clean machine/container without OpenSSH CLI installed.
+- [ ] Verify SSH terminal connections work.
+- [ ] Verify SFTP operations work.
+- [ ] Verify no process named `ssh`, `scp`, or `sftp` is spawned during terminal or SFTP use.
+- [ ] Verify `~/.ssh` is not read automatically.
+- [ ] Verify `SSH_AUTH_SOCK` is ignored unless `ENABLE_OS_SSH_AGENT=true`.
 
 ## How It Works
 
@@ -28,6 +49,50 @@ Ant Tech Async is a playful working name for async remote operations. It is not 
 3. Browser mode uses `/api/ssh` as an authenticated WebSocket relay and `/api/security/connect-token` for short-lived connect authorization.
 4. Electron mode uses the main process in `electron/` plus the local API on `127.0.0.1:8790` for token issuance and SFTP authorization.
 5. SSH, SFTP, and identity flows all resolve secret material only when needed, then clean it up after use.
+
+## Client Local Network Access
+
+Local connectivity is split by runtime trust boundary:
+
+- `browser/server relay`: target reachability is from the hosted backend server context. Because of SSRF risk and wrong-localhost semantics, browser runtime rejects `LOOPBACK` and `PRIVATE_LAN` targets with:
+  `This target is local to your device. Please use Electron Desktop or Local Bridge.`
+- `electron desktop`: target reachability is from the user's laptop context. Electron may connect to `LOOPBACK`, `PRIVATE_LAN`, and public remote hosts using the internal `ssh2` runtime.
+- `local bridge runtime`: may connect to approved local/private targets only, with short-lived scoped session token, explicit per-target approval, deterministic cleanup, loopback-only listener bind, and metadata-only logs.
+
+Host target classification used by access policy:
+
+- `LOOPBACK`: `localhost`, `127.0.0.1`, `::1`, `127.0.0.0/8`
+- `PRIVATE_LAN`: RFC1918 IPv4 (`10/8`, `172.16/12`, `192.168/16`) and link-local `169.254/16`
+- `WILDCARD_INVALID`: `0.0.0.0`, `::`
+- `PUBLIC_REMOTE`: public IPv4
+- `UNKNOWN_DOMAIN`: domain hostnames that require runtime DNS resolution
+
+## VMware and VirtualBox Access
+
+VM targets are usually private network addresses, not localhost.
+
+- VM NAT with port-forwarding:
+  Connect from Electron/local bridge to `127.0.0.1:<forwardedPort>`.
+- VM host-only adapter:
+  Connect to host-only VM IP (for example `192.168.56.x`).
+- VM bridged adapter:
+  Connect to VM LAN IP (for example `192.168.1.x`).
+
+This support is network reachability only; the app does not manage VMware/VirtualBox APIs.
+
+## VPN and Local-First Direction
+
+- If VPN policy blocks access to the hosted Ant Tech Async web app, browser mode cannot open because the control plane is unreachable.
+- Electron desktop should support client-side connectivity from the laptop network/VPN context.
+- Recommended future mode: `Desktop Local-First Runtime`
+  - Electron UI runs locally.
+  - SSH/SFTP runtime runs locally.
+  - Hosts/identities available in local secure storage.
+  - Optional sync to central server when reachable.
+- Optional future `Local Coordinator`:
+  - local API bound to `127.0.0.1` only.
+  - strict token/CORS/Host checks.
+  - never expose unauthenticated localhost API.
 
 ## Core Files
 

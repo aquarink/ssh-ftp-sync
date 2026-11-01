@@ -1,19 +1,19 @@
 {
   "token": {
-    "issuedMs": 3,
-    "tokenId": "ecd837af-1f17-4045-8189-a48ac57811f5"
+    "issuedMs": 4,
+    "tokenId": "e9ba8e8c-b4b7-4900-8155-60d0b5688481"
   },
   "sessions": [
     {
-      "id": "test-abrupt-1779672848519",
-      "connectMs": 119,
+      "id": "test-abrupt-1793501636792",
+      "connectMs": 40,
       "cleaned": true,
-      "cleanupMs": 1,
+      "cleanupMs": 0,
       "ephemeralCleared": true
     },
     {
-      "id": "test-grace-1779672848516",
-      "connectMs": 125,
+      "id": "test-grace-1793501636788",
+      "connectMs": 40,
       "cleaned": true,
       "cleanupMs": 0,
       "ephemeralCleared": true
@@ -27,6 +27,9 @@
     "cleanupDuplicateCalls": 0,
     "staleSessionsCleaned": 0,
     "reconnectAttempts": 0,
+    "sessionsDetached": 0,
+    "sessionsResumed": 0,
+    "detachExpired": 0,
     "cleanupErrors": 0
   },
   "metricsAfter": {
@@ -37,6 +40,9 @@
     "cleanupDuplicateCalls": 0,
     "staleSessionsCleaned": 0,
     "reconnectAttempts": 0,
+    "sessionsDetached": 0,
+    "sessionsResumed": 0,
+    "detachExpired": 0,
     "cleanupErrors": 0
   }
 }

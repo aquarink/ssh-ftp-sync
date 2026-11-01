@@ -12,6 +12,7 @@ const {
   verifyPassword,
 } = require('./auth');
 const { verifySignupEmail } = require('./emailVerification');
+const { validateRegisterLegalConsent } = require('./legalPolicy');
 const { validateTurnstile } = require('./turnstile');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
@@ -26,6 +27,9 @@ const {
   invalidateConnectAuthorizationsByIdentity,
   invalidateConnectAuthorizationsByUser,
   validateConnectTokenRequest,
+  classifyTargetHost,
+  isUnspecifiedAddress,
+  validateApiBindHost,
 } = require('./accessPolicy');
 const { getSecurityMetrics } = require('./securityMetrics');
 const { logIdentityEvent, redactSecretFields } = require('./securityLog');
@@ -38,7 +42,7 @@ const {
 } = require('./credentialStore');
 
 const port = Number(process.env.API_PORT || 8790);
-const maxBodyBytes = 50 * 1024 * 1024;
+const maxBodyBytes = 1024 * 1024 * 1024;
 
 function json(res, status, payload, headers = {}) {
   res.writeHead(status, {
@@ -187,14 +191,16 @@ async function register(req, res) {
     throw Object.assign(new Error('A valid email is required'), { status: 400 });
   }
 
+  validateRegisterLegalConsent(body);
+
   const emailCheck = await verifySignupEmail(email);
   const user = { id: randomUUID(), email };
   try {
     await pool.execute(
       `INSERT INTO users
-        (id, email, password_hash, email_check_result, email_safe_to_send, email_checked_at)
-       VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(3))`,
-      [user.id, user.email, await hashPassword(body.password), emailCheck.result, emailCheck.safeToSend]
+        (id, email, password_hash, email_check_result, email_safe_to_send, email_checked_at, legal_accepted_version, legal_accepted_at)
+       VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(3), ?, UTC_TIMESTAMP(3))`,
+      [user.id, user.email, await hashPassword(body.password), emailCheck.result, emailCheck.safeToSend, body.legalVersion]
     );
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
@@ -476,6 +482,10 @@ function identityPayload(body) {
     if (runtime === 'browser') {
       throw Object.assign(new Error('Authentication method is not supported in browser runtime'), { status: 400 });
     }
+    const enableSshAgent = process.env.ENABLE_OS_SSH_AGENT === 'true';
+    if (!enableSshAgent) {
+      throw Object.assign(new Error('OS ssh-agent integration is disabled by default. Enable it via ENABLE_OS_SSH_AGENT=true.'), { status: 400 });
+    }
     secret = { type, agent: process.platform === 'win32' ? 'pageant' : (process.env.SSH_AUTH_SOCK || '') };
     secretProvided = true;
   }
@@ -673,10 +683,26 @@ async function testIdentity(req, res, id) {
   const username = String(body.username || '').trim();
   const port = Number.parseInt(body.port, 10) || 22;
   if (!host || !username) throw Object.assign(new Error('Host and username are required'), { status: 400 });
+
+  if (isUnspecifiedAddress(host)) {
+    throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
+  }
+
+  const runtime = String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser';
+  const targetClass = classifyTargetHost(host);
+
+  if (targetClass === 'WILDCARD_INVALID') {
+    throw Object.assign(new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets'), { status: 400 });
+  }
+  if (runtime === 'browser' && (targetClass === 'LOOPBACK' || targetClass === 'PRIVATE_LAN')) {
+    logIdentityEvent('localNetworkDeniedInBrowser', { userId: user.id, host, runtime, targetClass });
+    throw Object.assign(new Error('This target is local to your device. Please use Electron Desktop or Local Bridge.'), { status: 403 });
+  }
+
   const resolved = await resolveIdentity({
     userId: user.id,
     hostId: null,
-    runtime: String(body.runtime || 'browser').toLowerCase() === 'electron' ? 'electron' : 'browser',
+    runtime,
     authType: body.authType || null,
     credentialId: id,
     purpose: 'test_connection',
@@ -997,6 +1023,14 @@ const server = http.createServer((req, res) => {
 
 attachSshWebSocket(server);
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Ant Tech Async API listening on http://127.0.0.1:${port}`);
+const apiBindHost = process.env.API_BIND_HOST || '127.0.0.1';
+const apiBindValidation = validateApiBindHost(apiBindHost);
+
+if (!apiBindValidation.ok) {
+  console.error("CRITICAL: Local bridge listener must bind only to a loopback address, never 0.0.0.0 or unspecified/wildcard addresses.");
+  process.exit(1);
+}
+
+server.listen(port, apiBindHost, () => {
+  console.log(`Ant Tech Async API listening on http://${apiBindHost}:${port}`);
 });

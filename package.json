@@ -45,6 +45,8 @@
   "jest": {
     "testEnvironment": "node",
     "testMatch": ["**/*.test.js"],
+    "testPathIgnorePatterns": ["/node_modules/", "/dist/"],
+    "modulePathIgnorePatterns": ["<rootDir>/dist/"],
     "collectCoverageFrom": [
       "server/**/*.js",
       "electron/**/*.js",

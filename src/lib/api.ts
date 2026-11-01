@@ -150,10 +150,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ identifier, password, turnstileToken }),
     }),
-  register: (email: string, password: string, turnstileToken: string) =>
+  register: (email: string, password: string, turnstileToken: string, agreeLegal?: boolean, legalVersion?: string) =>
     request<{ ok: true; message: string }>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, turnstileToken }),
+      body: JSON.stringify({ email, password, turnstileToken, agreeLegal, legalVersion }),
     }),
   logout: () =>
     request<{ ok: true }>('/api/auth/logout', {
@@ -248,7 +248,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  sftpOperation: <T = any>(hostId: string, operation: string, payload: Record<string, any>) =>
+  sftpOperation: <T = unknown>(hostId: string, operation: string, payload: Record<string, unknown>) =>
     request<T>(`/api/hosts/${encodeURIComponent(hostId)}/sftp/${encodeURIComponent(operation)}`, {
       method: 'POST',
       body: JSON.stringify(payload),

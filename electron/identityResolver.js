@@ -66,6 +66,9 @@ function resolveSecretMaterial(secret, runtime) {
   }
   if (type === 'agent') {
     if (runtime === 'browser') browserUnsupported();
+    if (process.env.ENABLE_OS_SSH_AGENT !== 'true') {
+      throw new Error('OS ssh-agent integration is disabled by default. Enable it via ENABLE_OS_SSH_AGENT=true.');
+    }
     if (typeof secret.agent !== 'string' || !secret.agent) credentialUnavailable();
     return { agent: secret.agent };
   }

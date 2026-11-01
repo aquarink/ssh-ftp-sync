@@ -79,6 +79,7 @@ const timeline = [
   { phase: '1.3', title: 'Key Isolation' },
   { phase: '1.4', title: 'Session Cleanup' },
   { phase: '1.5', title: 'Zero-Trust Access Layer' },
+  { phase: '4.0', title: 'Client Local Network Access' },
 ] as const;
 
 const whyItems = [
@@ -132,6 +133,25 @@ const researchTitles = [
   'Enabling Secure Shell Access with OpenID Connect',
   'Towards SSH3: how HTTP/3 improves secure shells',
   'ESX: A Self-Generated Control Policy for Remote Access With SSH Based on eBPF',
+] as const;
+
+const phase4Highlights = [
+  {
+    title: 'Browser Relay Guard',
+    detail: 'Blocks localhost and private-LAN targets from remote backend context.',
+  },
+  {
+    title: 'Electron Local Reachability',
+    detail: 'Supports localhost, VM IP, LAN private IP, and VPN-reachable targets from user laptop.',
+  },
+  {
+    title: 'Wildcard Target Rejection',
+    detail: 'Rejects 0.0.0.0 and :: as invalid connection targets in all runtimes.',
+  },
+  {
+    title: 'Approved Local Bridge',
+    detail: 'Explicit approval, scoped short-lived session, deterministic cleanup, metadata-only logs.',
+  },
 ] as const;
 
 export function LandingPage({ onNavigate }: LandingPageProps) {
@@ -433,6 +453,30 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
         </section>
 
         <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <div className="mb-6 rounded-2xl border border-primary/25 bg-primary/10 p-5 sm:p-6">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-primary/90">
+              <ShieldCheck size={14} />
+              Phase 4
+            </div>
+            <h3 className="mt-2 text-lg font-semibold text-white sm:text-xl">Client Local Network Access</h3>
+            <p className="mt-2 text-sm leading-7 text-textMuted sm:text-base">
+              Browser relay blocks localhost and private LAN targets because they are local to the user's device, not
+              the hosted backend server. Local and VPN-private connections are supported through Electron runtime and
+              approved local bridge sessions with scoped short-lived authorization.
+            </p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {phase4Highlights.map(({ title, detail }) => (
+                <div
+                  key={title}
+                  className="rounded-xl border border-primary/20 bg-background/40 px-4 py-3"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-primary/85">{title}</div>
+                  <p className="mt-2 text-xs leading-6 text-textMuted sm:text-sm">{detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="rounded-[32px] border border-primary/20 bg-gradient-to-r from-primary/10 via-surface/80 to-background/70 p-6 sm:p-8">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -460,9 +504,25 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       </main>
 
       <footer className="relative z-10 border-t border-border/80 bg-background/70">
-        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-6 text-xs text-textMuted sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <span>Ant Tech Async</span>
-          <span>Research-guided secure remote operations platform</span>
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6 text-xs text-textMuted sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-1">
+            <span className="font-semibold text-white">Ant Tech Async</span>
+            <span>Research-guided secure remote operations platform</span>
+          </div>
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => onNavigate('/terms')}
+              className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+            >
+              Terms & Conditions
+            </button>
+            <button
+              onClick={() => onNavigate('/privacy')}
+              className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+            >
+              Privacy Policy
+            </button>
+          </div>
         </div>
       </footer>
     </div>

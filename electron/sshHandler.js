@@ -1,6 +1,7 @@
 const { BrowserWindow, ipcMain, session } = require('electron');
 const { Client } = require('ssh2');
 const { runSftpOperation } = require('../server/sftpService');
+const { isUnspecifiedAddress } = require('../server/accessPolicy');
 const { removeCredentialSecret, saveCredentialSecret } = require('./credentialVault');
 const { TerminalSessionManager } = require('./terminalSessionManager');
 const { resolveIdentity } = require('./identityResolver');
@@ -156,10 +157,13 @@ function testSshConnection(config, resolved) {
 
 ipcMain.on('ssh-connect', (event, payload) => {
   void (async () => {
-    const { id, userId, hostId, authType, credentialId, purpose, connectToken } = payload;
+    const { id, userId, hostId, authType, credentialId, purpose, connectToken, host } = payload;
     let authorization = null;
     let resolved = null;
     try {
+      if (isUnspecifiedAddress(host)) {
+        throw new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets');
+      }
       const windowId = BrowserWindow.fromWebContents(event.sender)?.id || null;
       const effectiveUserId = await resolveDesktopUserId(event, userId);
       authorization = await consumeConnectToken({
@@ -273,6 +277,9 @@ ipcMain.handle('identity-remove-secret', async (event, { userId, id }) => {
 });
 
 ipcMain.handle('identity-test', async (event, { userId, hostUserId, hostId, credentialId, authType, host, port, username }) => {
+  if (isUnspecifiedAddress(host)) {
+    throw new Error('Unspecified or wildcard target addresses (0.0.0.0 / ::) are not allowed as connection targets');
+  }
   const effectiveUserId = await resolveDesktopUserId(event, userId);
   const resolved = await resolveIdentity({
     userId: effectiveUserId,

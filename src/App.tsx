@@ -4,6 +4,8 @@ import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
 import { TerminalView } from './components/TerminalView';
+import { TermsPage } from './components/TermsPage';
+import { PrivacyPage } from './components/PrivacyPage';
 import { api, Host, ManagedUser, Session, SshCredential } from './lib/api';
 
 type SshTabStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'closed';
@@ -116,6 +118,7 @@ function App() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [nextPassword, setNextPassword] = useState('');
   const [confirmNextPassword, setConfirmNextPassword] = useState('');
+  const [agreeLegal, setAgreeLegal] = useState(false);
 
   // Form states
   const [fName, setFName] = useState('');
@@ -278,7 +281,7 @@ function App() {
       window.history.replaceState({}, '', '/app');
       setRoute('/app');
     }
-    if (!session && route !== '/' && route !== '/login' && route !== '/register') {
+    if (!session && route !== '/' && route !== '/login' && route !== '/register' && route !== '/terms' && route !== '/privacy') {
       window.history.replaceState({}, '', '/');
       setRoute('/');
     }
@@ -356,8 +359,8 @@ function App() {
     try {
       const { hosts } = await api.listHosts();
       setHosts(hosts);
-    } catch (err: any) {
-      console.error('Error fetching hosts:', err.message);
+    } catch (err) {
+      console.error('Error fetching hosts:', err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingHosts(false);
     }
@@ -368,8 +371,8 @@ function App() {
     try {
       const { identities, credentials } = await api.listIdentities();
       setCredentials(identities || credentials);
-    } catch (err: any) {
-      console.error('Error fetching credentials:', err.message);
+    } catch (err) {
+      console.error('Error fetching credentials:', err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -440,16 +443,20 @@ function App() {
         if (authPassword !== authConfirmPassword) {
           throw new Error("Passwords do not match");
         }
+        if (!agreeLegal) {
+          throw new Error("You must agree to the Terms & Conditions and Privacy Policy");
+        }
 
-        const { message } = await api.register(emailLower, authPassword, turnstileToken);
+        const { message } = await api.register(emailLower, authPassword, turnstileToken, agreeLegal, '2026-05');
         setAuthMode('login');
         setAuthNotice(message);
         setAuthEmail('');
         setAuthPassword('');
         setAuthConfirmPassword('');
+        setAgreeLegal(false);
       }
-    } catch (err: any) {
-      setAuthError(err.message);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
     } finally {
       resetTurnstile();
       setAuthLoading(false);
@@ -537,14 +544,36 @@ function App() {
       if (fAuthType === 'identity' && !fCredentialId) {
         throw new Error('Select an identity for this host');
       }
+      if (fAuthType === 'password' && !fPass) {
+        throw new Error('Enter a password or select a saved identity');
+      }
+
+      let credentialId = fAuthType === 'identity' ? fCredentialId : null;
+      let authType: Host['authType'] = fAuthType;
+      if (fAuthType === 'password') {
+        const secret = { type: 'password' as const, password: fPass };
+        const { credential } = await api.createCredential({
+          type: 'password',
+          label: `${hostName} password`,
+          username: fUser,
+          password: fPass,
+          notes: `Created from host ${fUser}@${fHost}:${parseInt(fPort) || 22}`,
+          runtime: window.ipcRenderer ? 'electron' : 'browser',
+        });
+        if (window.ipcRenderer) {
+          await window.ipcRenderer.invoke('identity-save-secret', { userId: session.user.id, id: credential.id, secret });
+        }
+        credentialId = credential.id;
+        authType = 'identity';
+      }
 
       const newHostData: Omit<Host, 'id'> & { removeCredential?: boolean } = {
         name: hostName,
         host: fHost,
         port: parseInt(fPort) || 22,
         username: fUser,
-        authType: fAuthType,
-        credentialId: fAuthType === 'identity' ? fCredentialId : null,
+        authType,
+        credentialId,
         startupDirectory: fStartupDirectory || null,
         notes: fNotes || null,
         tags: fTags || null,
@@ -561,8 +590,8 @@ function App() {
       fetchCredentials();
 
       closeHostModal();
-    } catch (err: any) {
-      alert('Error saving host: ' + err.message);
+    } catch (err) {
+      alert('Error saving host: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -576,8 +605,8 @@ function App() {
       closingTabs.forEach(tab => window.ipcRenderer?.send('ssh-disconnect', { id: tab.id }));
       setSshTabs(tabs => tabs.filter(tab => tab.hostId !== hostId));
       if (closingTabs.some(tab => tab.id === activeTabId)) setActiveTabId(null);
-    } catch (err: any) {
-      alert('Error deleting host: ' + err.message);
+    } catch (err) {
+      alert('Error deleting host: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -586,8 +615,8 @@ function App() {
     try {
       const { users } = await api.listUsers();
       setManagedUsers(users);
-    } catch (err: any) {
-      alert('Error loading users: ' + err.message);
+    } catch (err) {
+      alert('Error loading users: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setUsersLoading(false);
     }
@@ -609,8 +638,8 @@ function App() {
     try {
       const { user } = await api.reviewUser(userId, approvalStatus);
       setManagedUsers(managedUsers.map(item => item.id === user.id ? user : item));
-    } catch (err: any) {
-      alert('Error reviewing user: ' + err.message);
+    } catch (err) {
+      alert('Error reviewing user: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -629,8 +658,8 @@ function App() {
       setNextPassword('');
       setConfirmNextPassword('');
       setAccountNotice('Password updated.');
-    } catch (err: any) {
-      setAccountError(err.message);
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -656,8 +685,8 @@ function App() {
       };
       setSshTabs(tabs => [...tabs, tab]);
       setActiveTabId(tabId);
-    } catch (error: any) {
-      alert(error.message || 'Unable to authorize SSH connect');
+    } catch (error) {
+      alert((error instanceof Error ? error.message : String(error)) || 'Unable to authorize SSH connect');
     }
   };
 
@@ -697,6 +726,13 @@ function App() {
     if (status === 'error' || status === 'closed') return 'bg-red-500';
     return 'bg-textMuted';
   };
+
+  if (route === '/terms') {
+    return <TermsPage onNavigate={navigate} session={session} />;
+  }
+  if (route === '/privacy') {
+    return <PrivacyPage onNavigate={navigate} session={session} />;
+  }
 
   if (!session) {
     if (route === '/') {
@@ -760,17 +796,47 @@ function App() {
             </div>
 
             {authMode === 'register' && (
-              <div>
-                <label className="block text-xs font-medium text-textMuted mb-1.5">Confirm Password</label>
-                <input
-                  value={authConfirmPassword}
-                  onChange={e => setAuthConfirmPassword(e.target.value)}
-                  required
-                  type="password"
-                  placeholder="••••••••"
-                  className="w-full bg-background/50 border border-border rounded-lg px-3 py-2 text-sm text-white placeholder-textMuted/50 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all duration-200"
-                />
-              </div>
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-textMuted mb-1.5">Confirm Password</label>
+                  <input
+                    value={authConfirmPassword}
+                    onChange={e => setAuthConfirmPassword(e.target.value)}
+                    required
+                    type="password"
+                    placeholder="••••••••"
+                    className="w-full bg-background/50 border border-border rounded-lg px-3 py-2 text-sm text-white placeholder-textMuted/50 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all duration-200"
+                  />
+                </div>
+                <div className="flex items-start space-x-2 pt-1">
+                  <input
+                    id="agreeLegal"
+                    required
+                    type="checkbox"
+                    checked={agreeLegal}
+                    onChange={e => setAgreeLegal(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-border bg-background text-primary focus:ring-primary focus:ring-opacity-25"
+                  />
+                  <label htmlFor="agreeLegal" className="text-xs text-textMuted leading-relaxed select-none">
+                    I agree to the{' '}
+                    <button
+                      type="button"
+                      onClick={() => navigate('/terms')}
+                      className="text-primary hover:underline font-medium inline bg-transparent p-0 border-none cursor-pointer"
+                    >
+                      Terms & Conditions
+                    </button>{' '}
+                    and{' '}
+                    <button
+                      type="button"
+                      onClick={() => navigate('/privacy')}
+                      className="text-primary hover:underline font-medium inline bg-transparent p-0 border-none cursor-pointer"
+                    >
+                      Privacy Policy
+                    </button>
+                  </label>
+                </div>
+              </>
             )}
 
             {turnstileSiteKey ? (
@@ -821,6 +887,14 @@ function App() {
               {authMode === 'login' ? 'Sign Up' : 'Sign In'}
             </button>
           </div>
+        </div>
+
+        <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-textMuted flex items-center justify-center gap-4 z-10">
+          <button onClick={() => navigate('/')} className="hover:text-white transition cursor-pointer bg-transparent border-none p-0">Home</button>
+          <span>•</span>
+          <button onClick={() => navigate('/terms')} className="hover:text-white transition cursor-pointer bg-transparent border-none p-0">Terms & Conditions</button>
+          <span>•</span>
+          <button onClick={() => navigate('/privacy')} className="hover:text-white transition cursor-pointer bg-transparent border-none p-0">Privacy Policy</button>
         </div>
       </div>
     );
@@ -1308,7 +1382,7 @@ function App() {
               </div>
               <div>
                 <label className="block text-xs text-textMuted mb-1">Authentication</label>
-                <select value={fAuthType} onChange={e => setFAuthType(e.target.value as any)} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
+                <select value={fAuthType} onChange={e => setFAuthType(e.target.value as 'password' | 'identity' | 'one_time')} className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition">
                   <option value="password">Password</option>
                   <option value="identity">Identity / Keychain</option>
                   <option value="one_time" disabled>One-time key (disabled)</option>
@@ -1346,9 +1420,9 @@ function App() {
               )}
               <div>
                 <label className="block text-xs text-textMuted mb-1">{editingHost ? 'New password' : 'Password'}</label>
-                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Not stored in host record" />
+                <input value={fPass} onChange={e=>setFPass(e.target.value)} disabled={fAuthType !== 'password'} type="password" className="w-full bg-background border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-primary transition disabled:opacity-50" placeholder="Saved as a host identity" />
                 <div className="mt-2 text-xs text-textMuted leading-5">
-                  Password auth is not auto-promoted to all identities. Use a saved identity if you need persistence.
+                  Passwords are saved as identities and assigned only to this host.
                 </div>
               </div>
               {editingHost?.credentialId && (
@@ -1405,6 +1479,32 @@ function App() {
                   <button type="submit" className="px-4 py-2 bg-primary text-background text-sm font-medium rounded-md hover:bg-primary/90">Change Password</button>
                 </div>
               </form>
+              <div className="border-t border-border pt-4 mt-5 flex justify-between items-center text-xs text-textMuted">
+                <span>Legal Version: 2026-05</span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAccountOpen(false);
+                      navigate('/terms');
+                    }}
+                    className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+                  >
+                    Terms
+                  </button>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAccountOpen(false);
+                      navigate('/privacy');
+                    }}
+                    className="hover:text-white transition cursor-pointer bg-transparent border-none p-0"
+                  >
+                    Privacy
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

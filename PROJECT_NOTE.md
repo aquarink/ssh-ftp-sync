@@ -1,3 +1,91 @@
+## [2026-05-25] - Standalone SSH/SFTP Runtime Audit & Hardening
+
+- Objective: Make Ant Tech Async a fully standalone SSH/SFTP runtime independent of OS-level OpenSSH tooling (CLI, agent, keys, known_hosts, etc.).
+- Resolver changes:
+  - `server/identityResolver.js`: hardened `agent` identity resolution so browser runtime rejects agent use and all OS ssh-agent use requires explicit `ENABLE_OS_SSH_AGENT=true`.
+  - `electron/identityResolver.js`: applied the same explicit opt-in requirement for desktop agent identities.
+- Audit and security hardening:
+  - Audited the codebase to ensure zero usage of `child_process` (`spawn`, `exec`), `execa`, or local OpenSSH CLI files.
+  - Implemented explicit opt-in logic for OS-level `ssh-agent` integration via the `ENABLE_OS_SSH_AGENT=true` environment variable. By default, any attempt to resolve an `agent`-based identity is rejected.
+  - Enforced that the application does not automatically scan, list, or load keys from the local user's directory (`~/.ssh` or equivalent).
+- Production safety note:
+  - `ENABLE_OS_SSH_AGENT` must default to false/disabled.
+  - OS ssh-agent support is optional compatibility mode only.
+  - Production deployments must not enable `ENABLE_OS_SSH_AGENT=true` unless the operator explicitly accepts the risk of delegating authentication to the host OS agent.
+- Spawning guard implementation:
+  - Added `server/__tests__/sshSpawningGuard.test.js` to scan application code for forbidden execution patterns and automatic `.ssh` path access.
+  - Confirmed it is included in the normal Jest workflow because `npm run test` matches `**/*.test.js`.
+  - CI must block merges when this guard fails.
+- Documentation:
+  - Added documentation to `README.md` clarifying standalone runtime requirements, production ssh-agent policy, CI merge-blocking expectations, and manual verification steps.
+- Manual verification checklist:
+  - [ ] Test on a clean machine/container without OpenSSH CLI installed.
+  - [ ] Verify SSH terminal connections work.
+  - [ ] Verify SFTP operations work.
+  - [ ] Verify no process named `ssh`, `scp`, or `sftp` is spawned.
+  - [ ] Verify `~/.ssh` is not read automatically.
+  - [ ] Verify `SSH_AUTH_SOCK` is ignored unless `ENABLE_OS_SSH_AGENT=true`.
+- Verification:
+  - `npm run test` passed with 132 tests across 9 suites.
+  - The normal test run included `server/__tests__/sshSpawningGuard.test.js`.
+
+## [2026-05-25] - Phase 4 - Client Local Network Access Model
+
+- Objective: Correct Phase 4 semantics so "local access" means connectivity from the user's laptop network context (Electron/local bridge), not localhost/private access from the remote browser relay backend.
+- Implementation summary:
+  - Added `classifyTargetHost(host)` and helper classification in `server/accessPolicy.js`:
+    - `LOOPBACK`: `localhost`, `127.0.0.0/8`, `::1`
+    - `PRIVATE_LAN`: RFC1918 IPv4 (`10/8`, `172.16/12`, `192.168/16`) plus link-local `169.254/16`
+    - `WILDCARD_INVALID`: `0.0.0.0`, `::`, `[::]`
+    - `PUBLIC_REMOTE`: public IPv4
+    - `UNKNOWN_DOMAIN`: unresolved domain host
+  - Enforced browser relay policy in `authorizeConnectRequest`:
+    - browser runtime rejects `LOOPBACK` and `PRIVATE_LAN` with:
+      `This target is local to your device. Please use Electron Desktop or Local Bridge.`
+    - wildcard/unspecified targets are always rejected.
+  - Updated backend identity-test policy (`server/index.js`) with the same browser vs local-device guard behavior.
+  - Updated Electron runtime (`electron/sshHandler.js`) so it no longer blocks non-loopback targets when bridge flags are enabled; Electron now allows localhost/private/public by client reachability, while still rejecting wildcard invalid targets.
+  - Kept runtime as internal library-based SSH/SFTP (`ssh2`) with scoped connect-token validation, scoped identity resolution, and ephemeral credential cleanup.
+  - Extended local bridge runtime abstraction (`server/localBridge.js`):
+    - only `LOOPBACK` and `PRIVATE_LAN` targets,
+    - explicit per-target approval required,
+    - token-scoped short TTL sessions,
+    - deterministic listener/socket cleanup,
+    - metadata-only logs.
+  - Expanded test coverage in `server/__tests__/localhostBridge.test.js` for classification and runtime behavior:
+    - browser rejects loopback/private LAN,
+    - electron allows loopback/private LAN,
+    - wildcard invalid always rejected,
+    - public remote browser behavior unchanged.
+- Security decision:
+  - Browser relay must not become a path to backend-local/private network targets (SSRF and trust-boundary protection).
+  - Electron may access local/private/VPN-reachable targets because execution context is user laptop.
+  - Local bridge remains constrained and non-open-proxy by explicit approval + scoped token + short TTL + cleanup.
+- Current classification:
+  - This is now an access policy gate plus a minimal local bridge runtime abstraction POC.
+  - It is still not a full production Local Secure Bridge daemon (no dedicated supervised local service lifecycle yet).
+- Acceptance test result:
+  - `npm run test` passed with 143 tests across 11 suites.
+  - `npm run build` completed successfully (`tsc`, Vite production build, and electron-builder).
+
+## [2026-05-25] - Legal Pages and Registration Consent Sync
+
+- Objective: finalize legal consent flow and public legal page accessibility without breaking existing users.
+- Implementation summary:
+  - Registration requires explicit legal consent and version validation before email verification and database insert.
+  - Registration insert explicitly stores `legal_accepted_version` and `legal_accepted_at`.
+  - Added `server/legalPolicy.js` plus tests (`server/__tests__/legalPolicy.test.js`) for:
+    - missing `agreeLegal` -> 400
+    - wrong `legalVersion` -> 400
+    - valid consent/version -> success
+  - Added route/link tests (`server/__tests__/legalPagesRouting.test.js`) to confirm:
+    - `/terms` and `/privacy` remain public routes,
+    - legal links exist in landing, auth page, and in-app account area.
+  - Migration `009_user_legal_consent.sql` uses `ADD COLUMN IF NOT EXISTS` to stay idempotent-safe.
+- Security/compatibility decision:
+  - Existing users remain compatible because new legal columns are nullable.
+  - Legal acceptance is enforced at registration-time for new users.
+
 ## [2026-05-24] - Phase 1.1 - Smart Identity Engine
 
 - Objective: build a scoped identity resolver for SSH/SFTP/FTP runtime connections so host sessions only use explicitly assigned or explicitly selected identities.
@@ -215,4 +303,3 @@
 
 ### Technical Debt
 - **Duplicated SQL Query Logic**: `loadHost` is separately defined and implemented in `server/connectToken.js` and `server/identityResolver.js` with slightly different alias bindings (`userId` vs `user_id`). These should be unified into a shared database model layer.
-
