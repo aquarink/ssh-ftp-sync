@@ -824,3 +824,9 @@ Limitations:
 - New `electron/networkAwareness.js` (pure Node, unit tested): classifies VPN-style interfaces, resolves + TCP-probes the target, returns a hint (`reachable` / `unreachable` / `vpn_required` / `vpn_route_missing` / `dns_failed`). Registered as the read-only `network-assess` IPC channel from `sshHandler.js`.
 - Renderer: `src/lib/networkAwareness.ts` wrapper; `App.tsx` runs the check on connect and reconnect (Electron only) and shows a VPN + reachability line while connecting and hint-specific advice on a failed connect.
 - Browser runtime unchanged: it cannot observe VPN state and relies on the relay as a bastion. Design notes in `docs/CONNECTION_RESILIENCE_AND_RUNTIME_ANALYSIS.md`.
+
+### Phase 2.5 — Desktop runtime against the hosted deployment (2026-11-01)
+- `electron/appConfig.js` resolves one API origin (`ATA_API_ORIGIN` → dev local → hosted) and preload publishes it as `window.__ATA_CONFIG__`; `sshHandler.js` no longer hard-codes `127.0.0.1:8790`.
+- `electron/apiProxy.js`: renderer API calls go through `api-request` IPC and the main process fetches with the session cookie jar (no CORS/SameSite issues from `file://`); the relay WebSocket handshake gets the session cookie injected.
+- Relay accepts `runtime=electron`; token scope check unchanged. Transport per tab: `direct` (ssh2 in main) when the target is reachable, else `relay`; chosen on connect and re-evaluated on reconnect.
+- Tests: `electron/appConfig.test.js`, `electron/apiProxy.test.js`; relay integration test gains runtime checks. Known gap: Turnstile on `file://` login (see analysis doc).

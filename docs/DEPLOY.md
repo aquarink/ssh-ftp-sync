@@ -98,3 +98,11 @@ workflow files. Add them from the GitHub UI, or push with a `workflow`-scoped to
       - name: Relay detach/resume integration test
         run: node scripts/integration/relay-resume-test.js
 ```
+
+## Desktop runtime against this deployment
+
+The Electron build now targets this deployment by default (`https://ata.uinjakarta.id`).
+Override with `ATA_API_ORIGIN=https://…` in the desktop app's environment; in
+`NODE_ENV=development` it uses the local API on `API_PORT`. The relay change that
+lets the desktop runtime fall back to the relay (`runtime=electron`) lives in
+`server/sshWebSocket.js`, so a server restart is part of this release too.

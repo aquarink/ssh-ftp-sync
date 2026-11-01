@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw, WifiOff } from 'lucide-react';
-import { assessConnectivity, adviceFor, describeTarget, describeVpn, type ConnectivityAssessment } from './lib/networkAwareness';
+import { assessConnectivity, adviceFor, chooseTransport, describeTarget, describeTransport, describeVpn, type ConnectivityAssessment, type SshTransport } from './lib/networkAwareness';
 import { KeychainPanel } from './components/KeychainPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
@@ -26,6 +26,8 @@ interface SshTab {
   /** Electron only: VPN + target reachability observed around connect/reconnect. */
   networkInfo?: ConnectivityAssessment | null;
   networkChecking?: boolean;
+  /** Direct ssh2 from this computer (desktop, target reachable) or the hosted relay. */
+  transport?: SshTransport;
 }
 
 const DEFAULT_TERMINAL_FONT_SIZE = 14;
@@ -33,9 +35,10 @@ const MIN_TERMINAL_FONT_SIZE = 8;
 const MAX_TERMINAL_FONT_SIZE = 40;
 
 /** Electron only: one-line VPN + reachability summary shown while connecting or after a failure. */
-function NetworkStatusLine({ info, checking, withAdvice = false }: {
+function NetworkStatusLine({ info, checking, transport, withAdvice = false }: {
   info?: ConnectivityAssessment | null;
   checking?: boolean;
+  transport?: SshTransport;
   withAdvice?: boolean;
 }) {
   if (checking && !info) {
@@ -46,6 +49,7 @@ function NetworkStatusLine({ info, checking, withAdvice = false }: {
   const advice = withAdvice ? adviceFor(info) : null;
   return (
     <div className={`flex flex-col items-center gap-1 text-xs ${ok ? 'text-textMuted' : 'text-yellow-200'}`}>
+      {transport && <span className="font-medium">{describeTransport(transport, info)}</span>}
       <span className="inline-flex items-center gap-1.5">
         {info.vpn.active ? <ShieldCheck size={12} className="shrink-0" /> : <WifiOff size={12} className="shrink-0" />}
         {describeVpn(info)} · {describeTarget(info)}
@@ -690,20 +694,16 @@ function App() {
     }
   };
 
-  // Electron only: observe VPN state and target reachability so a failed connect
-  // can explain itself (e.g. "no VPN interface is active") instead of a bare timeout.
-  const refreshNetworkInfo = (tabId: string, host: Host) => {
-    if (!window.ipcRenderer) return;
-    updateTab(tabId, { networkChecking: true });
-    void assessConnectivity(host.host, host.port).then((info) => {
-      updateTab(tabId, { networkInfo: info, networkChecking: false });
-    });
-  };
-
   const connectToHost = async (host: Host) => {
     try {
       const tabId = crypto.randomUUID();
       const runtime = window.ipcRenderer ? 'electron' : 'browser';
+      // Desktop: observe VPN + reachability first and pick the transport (direct
+      // ssh2 from this computer, or the hosted relay as a bastion when the target
+      // is not reachable directly). The browser has only the relay. The check is
+      // bounded by the probe timeout, so a dead target costs a few seconds at most.
+      const networkInfo = window.ipcRenderer ? await assessConnectivity(host.host, host.port) : null;
+      const transport = chooseTransport(networkInfo);
       const tokenResponse = await api.requestConnectToken({
         hostId: host.id,
         runtime,
@@ -719,10 +719,12 @@ function App() {
         host,
         connectToken: tokenResponse.token,
         status: 'connecting',
+        transport,
+        networkInfo,
+        networkChecking: false,
       };
       setSshTabs(tabs => [...tabs, tab]);
       setActiveTabId(tabId);
-      refreshNetworkInfo(tabId, host);
     } catch (error) {
       alert((error instanceof Error ? error.message : String(error)) || 'Unable to authorize SSH connect');
     }
@@ -745,7 +747,29 @@ function App() {
 
   const reconnectTab = (tabId: string) => {
     const current = sshTabs.find(tab => tab.id === tabId);
-    if (current) refreshNetworkInfo(tabId, current.host);
+    if (window.ipcRenderer && current) {
+      // Desktop: re-check VPN + reachability first, so a reconnect after the VPN
+      // came up (or went away) can switch between direct SSH and the relay.
+      updateTab(tabId, { status: 'connecting', errorMsg: '', reconnectInfo: undefined, networkChecking: true });
+      void assessConnectivity(current.host.host, current.host.port).then((info) => {
+        setSshTabs(tabs => tabs.map(tab => tab.id === tabId
+          ? (() => {
+            const next = chooseTransport(info);
+            // A changed transport remounts the terminal's connection effect, which
+            // connects on its own; only a same-transport retry needs the nonce bump.
+            const sameTransport = next === (tab.transport ?? 'direct');
+            return {
+              ...tab,
+              networkInfo: info,
+              networkChecking: false,
+              transport: next,
+              reconnectNonce: sameTransport ? (tab.reconnectNonce || 0) + 1 : tab.reconnectNonce,
+            };
+          })()
+          : tab));
+      });
+      return;
+    }
     setSshTabs(tabs => tabs.map(tab => tab.id === tabId
       ? { ...tab, status: 'connecting', errorMsg: '', reconnectInfo: undefined, reconnectNonce: (tab.reconnectNonce || 0) + 1 }
       : tab));
@@ -1262,7 +1286,7 @@ function App() {
                         <Loader2 size={32} className="text-primary animate-spin" />
                         <span className="text-sm text-textMuted">Connecting to {tab.hostname}...</span>
                         {window.ipcRenderer && (
-                          <NetworkStatusLine info={tab.networkInfo} checking={tab.networkChecking} />
+                          <NetworkStatusLine info={tab.networkInfo} checking={tab.networkChecking} transport={tab.transport} />
                         )}
                       </div>
                     )}
@@ -1289,7 +1313,7 @@ function App() {
                           <p className="text-sm opacity-80">{tab.errorMsg}</p>
                           {window.ipcRenderer && tab.status === 'error' && (
                             <div className="mt-3">
-                              <NetworkStatusLine info={tab.networkInfo} checking={tab.networkChecking} withAdvice />
+                              <NetworkStatusLine info={tab.networkInfo} checking={tab.networkChecking} transport={tab.transport} withAdvice />
                             </div>
                           )}
                           <button
@@ -1314,6 +1338,7 @@ function App() {
                       bottomPaddingPx={isTabletViewport ? 40 : DEFAULT_TERMINAL_BOTTOM_PADDING_PX}
                       showQuickActions={isTabletViewport || isMobileViewport}
                       reconnectNonce={tab.reconnectNonce || 0}
+                      transport={tab.transport}
                       onConnected={() => updateTab(tab.id, { status: 'connected', errorMsg: '', reconnectInfo: undefined })}
                       onError={(message) => updateTab(tab.id, { status: 'error', errorMsg: message, reconnectInfo: undefined })}
                       onClosed={({ message }) => updateTab(tab.id, { status: 'closed', errorMsg: message, reconnectInfo: undefined })}

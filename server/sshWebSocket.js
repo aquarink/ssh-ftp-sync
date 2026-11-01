@@ -69,9 +69,14 @@ async function getAuthorizedConnection(req, url) {
   const credentialId = url.searchParams.get('credentialId') || null;
   const authType = url.searchParams.get('authType') || null;
   const purpose = url.searchParams.get('purpose') || 'ssh';
+  // The relay serves the browser runtime and, because the desktop runtime falls
+  // back to it when a target is not reachable directly, the Electron runtime too.
+  // A connect token is scoped to the runtime it was issued for, so the client
+  // states its runtime here and the scope check still applies unchanged.
+  const runtime = url.searchParams.get('runtime') === 'electron' ? 'electron' : 'browser';
   const authorization = await authorizeConnectRequest(user.id, {
     hostId,
-    runtime: 'browser',
+    runtime,
     authType,
     credentialId,
     purpose,

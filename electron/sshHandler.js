@@ -16,17 +16,21 @@ const {
 } = require('./sessionLifecycle');
 const { logIdentityEvent, logVaultEvent } = require('./securityLog');
 const { registerNetworkAwarenessIpc } = require('./networkAwareness');
+const { getAppConfig } = require('./appConfig');
 
 const terminalSessions = new TerminalSessionManager();
 let activeUserId = null;
-const apiPort = Number(process.env.API_PORT || 8790);
+// One API origin for the desktop runtime (hosted by default; see appConfig.js).
+// Session verification and connect-token consumption go to the same backend the
+// renderer logged in to, with the cookie read from this window's session.
+const { apiOrigin } = getAppConfig();
 
 // Electron-only runtime awareness: VPN interface + target reachability. Read-only,
 // so a failed connect can explain itself ("no VPN interface is active").
 registerNetworkAwarenessIpc(ipcMain);
 
 async function consumeConnectToken(payload) {
-  const response = await fetch(`http://127.0.0.1:${apiPort}/api/security/connect-token/consume`, {
+  const response = await fetch(`${apiOrigin}/api/security/connect-token/consume`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -51,7 +55,7 @@ async function getAuthenticatedUserId(event) {
   }
 
   const cookies = await webContents.session.cookies.get({
-    url: `http://127.0.0.1:${apiPort}`,
+    url: `${apiOrigin}`,
     name: 'ats_session',
   });
 
@@ -60,7 +64,7 @@ async function getAuthenticatedUserId(event) {
   }
 
   const token = cookies[0].value;
-  const response = await fetch(`http://127.0.0.1:${apiPort}/api/auth/session`, {
+  const response = await fetch(`${apiOrigin}/api/auth/session`, {
     headers: {
       'Cookie': `ats_session=${token}`,
     },

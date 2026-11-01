@@ -3,7 +3,8 @@ import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { Copy, Clipboard } from 'lucide-react';
 import 'xterm/css/xterm.css';
-import { api } from '../lib/api';
+import { api, getWebSocketOrigin } from '../lib/api';
+import type { SshTransport } from '../lib/networkAwareness';
 import {
   RELAY_WATCHDOG_MS,
   decideReconnect,
@@ -40,6 +41,12 @@ interface TerminalViewProps {
   showQuickActions?: boolean;
   /** Increment to force an immediate manual reconnect (resets the automatic attempt counter). */
   reconnectNonce?: number;
+  /**
+   * Desktop only: `direct` runs ssh2 in the Electron main process, `relay` uses the
+   * hosted relay like the browser does (fallback when the target is not reachable
+   * directly). Defaults to `direct` in Electron when a host is given, else `relay`.
+   */
+  transport?: SshTransport;
   onConnected?: () => void;
   onError?: (message: string) => void;
   onClosed?: (info: TerminalClosedInfo) => void;
@@ -67,9 +74,15 @@ type IpcLifecyclePayload = {
 
 const WATCHDOG_CLOSE_CODE = 4000;
 
-function sshSocketUrl(hostId: string, sessionId: string) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}/api/ssh?hostId=${encodeURIComponent(hostId)}&sessionId=${encodeURIComponent(sessionId)}`;
+function sshSocketUrl(hostId: string, sessionId: string, runtime: 'browser' | 'electron') {
+  // The relay lives at the API origin: the page's own origin in the browser, the
+  // configured hosted origin in Electron (where window.location is file://).
+  const url = new URL('/api/ssh', getWebSocketOrigin());
+  url.searchParams.set('hostId', hostId);
+  url.searchParams.set('sessionId', sessionId);
+  // The connect token was issued for this runtime; the relay consumes it with the same one.
+  if (runtime === 'electron') url.searchParams.set('runtime', 'electron');
+  return url.toString();
 }
 
 export function TerminalView({
@@ -82,6 +95,7 @@ export function TerminalView({
   bottomPaddingPx = 24,
   showQuickActions = false,
   reconnectNonce = 0,
+  transport: transportProp,
   onConnected,
   onError,
   onClosed,
@@ -94,6 +108,7 @@ export function TerminalView({
   const fitAddon = useRef<FitAddon | null>(null);
   const inputDisposable = useRef<{ dispose: () => void } | null>(null);
   const inputSendRef = useRef<(data: string) => void>(() => {});
+  const resizeSendRef = useRef<() => void>(() => {});
   const reconnectRef = useRef<() => void>(() => {});
   const activeRef = useRef(active);
   // Always call the latest callbacks even though the connection closure is created once.
@@ -183,7 +198,11 @@ export function TerminalView({
     // ---------------------------------------------------------------------
     // Connection state machine (shared by the browser relay and Electron IPC)
     // ---------------------------------------------------------------------
-    const runtime: 'browser' | 'electron' = window.ipcRenderer && host ? 'electron' : 'browser';
+    const runtime: 'browser' | 'electron' = window.ipcRenderer ? 'electron' : 'browser';
+    // Desktop: direct ssh2 in the main process, or the hosted relay as a bastion
+    // when the target is not reachable directly (App chooses on connect and on
+    // reconnect). The browser has only the relay.
+    const transport: SshTransport = transportProp ?? (window.ipcRenderer && host ? 'direct' : 'relay');
     let disposed = false;
     let socket: WebSocket | null = null;
     // Bumped whenever the socket is replaced or the component unmounts, so late
@@ -234,7 +253,7 @@ export function TerminalView({
     };
 
     const sendTerminalInput = (data: string) => {
-      if (runtime === 'electron') {
+      if (transport === 'direct') {
         window.ipcRenderer.send('ssh-input', { id: sessionId, data });
         return;
       }
@@ -247,7 +266,7 @@ export function TerminalView({
     const sendResize = () => {
       if (!term.current) return;
       const { cols, rows } = term.current;
-      if (runtime === 'electron') {
+      if (transport === 'direct') {
         window.ipcRenderer.send('ssh-resize', { id: sessionId, cols, rows });
         return;
       }
@@ -255,6 +274,7 @@ export function TerminalView({
         socket.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     };
+    resizeSendRef.current = sendResize;
 
     const pasteText = (text: string) => {
       if (!text) return;
@@ -289,7 +309,7 @@ export function TerminalView({
     };
 
     const canResume = () =>
-      runtime === 'browser' && resumeToken !== null && (resumeDeadline === 0 || Date.now() < resumeDeadline);
+      transport === 'relay' && resumeToken !== null && (resumeDeadline === 0 || Date.now() < resumeDeadline);
 
     const finish = (decision: Extract<ReconnectDecision, { action: 'stop' }>, info: ConnectionCloseInfo) => {
       if (decision.final === 'closed') {
@@ -333,7 +353,7 @@ export function TerminalView({
     const openSocket = (options: { token: string } | { resume: string }) => {
       const generation = ++socketGeneration;
       const isResume = 'resume' in options;
-      const socketUrl = new URL(sshSocketUrl(hostId, sessionId));
+      const socketUrl = new URL(sshSocketUrl(hostId, sessionId, runtime));
       if (isResume) {
         socketUrl.searchParams.set('resume', sessionId);
         socketUrl.searchParams.set('resumeToken', options.resume);
@@ -460,7 +480,7 @@ export function TerminalView({
           effectiveToken = response.token;
         }
         if (disposed) return;
-        if (runtime === 'electron') {
+        if (transport === 'direct') {
           sendElectronConnect(effectiveToken);
         } else {
           openSocket({ token: effectiveToken });
@@ -495,7 +515,7 @@ export function TerminalView({
       }
     };
 
-    if (runtime === 'electron') {
+    if (transport === 'direct') {
       window.ipcRenderer.on('ssh-connected', onIpcConnected);
       window.ipcRenderer.on('ssh-error', onIpcError);
       window.ipcRenderer.on('ssh-closed', onIpcClosed);
@@ -578,7 +598,7 @@ export function TerminalView({
       if (consumeTokenTimer !== null) {
         window.clearTimeout(consumeTokenTimer);
       }
-      if (runtime === 'electron') {
+      if (transport === 'direct') {
         window.ipcRenderer.send('ssh-disconnect', { id: sessionId });
         window.ipcRenderer.removeListener('ssh-connected', onIpcConnected);
         window.ipcRenderer.removeListener('ssh-error', onIpcError);
@@ -593,10 +613,11 @@ export function TerminalView({
       reconnectRef.current = () => {};
       fitAddon.current = null;
       inputSendRef.current = () => {};
+      resizeSendRef.current = () => {};
       term.current?.dispose();
       term.current = null;
     };
-  }, [hostId, sessionId]);
+  }, [hostId, sessionId, transportProp]);
 
   useEffect(() => {
     if (reconnectNonce > 0) {
@@ -609,13 +630,7 @@ export function TerminalView({
       const frame = requestAnimationFrame(() => {
         if (fitAddon.current && term.current) {
           fitAddon.current.fit();
-          if (window.ipcRenderer) {
-            window.ipcRenderer.send('ssh-resize', {
-              id: sessionId,
-              cols: term.current.cols,
-              rows: term.current.rows
-            });
-          }
+          resizeSendRef.current();
         }
       });
       return () => cancelAnimationFrame(frame);
@@ -630,13 +645,7 @@ export function TerminalView({
     const frame = requestAnimationFrame(() => {
       if (!term.current || !fitAddon.current) return;
       fitAddon.current.fit();
-      if (window.ipcRenderer) {
-        window.ipcRenderer.send('ssh-resize', {
-          id: sessionId,
-          cols: term.current.cols,
-          rows: term.current.rows,
-        });
-      }
+      resizeSendRef.current();
     });
     return () => cancelAnimationFrame(frame);
   }, [fontSize, active, sessionId]);

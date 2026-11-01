@@ -66,6 +66,28 @@ export function describeTarget(info: ConnectivityAssessment): string {
   return `${where} unreachable${target.error ? ` (${target.error})` : ''}`;
 }
 
+export type SshTransport = 'direct' | 'relay';
+
+/**
+ * Which path a terminal uses. The browser has exactly one: the relay. The
+ * desktop runtime prefers a direct ssh2 connection from this computer and falls
+ * back to the hosted relay (a bastion inside the VPN) when the target is not
+ * reachable directly; an inconclusive check keeps the desktop default.
+ */
+export function chooseTransport(info: ConnectivityAssessment | null): SshTransport {
+  if (!canAssessConnectivity()) return 'relay';
+  if (!info) return 'direct';
+  return info.target.reachable ? 'direct' : 'relay';
+}
+
+export function describeTransport(transport: SshTransport, info?: ConnectivityAssessment | null): string {
+  if (transport === 'direct') return 'Direct SSH from this computer';
+  if (canAssessConnectivity() && info && !info.target.reachable) {
+    return 'Via relay: target not reachable directly from this computer';
+  }
+  return 'Via relay';
+}
+
 /** Hint-specific advice for a failed connect; null when there is nothing to add. */
 export function adviceFor(info: ConnectivityAssessment): string | null {
   switch (info.hint) {

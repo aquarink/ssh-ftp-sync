@@ -46,7 +46,7 @@ Module.prototype.require = function patchedRequire(id) {
         host: { id: body.hostId, host: '127.0.0.1', port: mockSshPort, username: 'testuser' },
         credentialId: null,
         authType: 'password',
-        runtime: 'browser',
+        runtime: body.runtime === 'electron' ? 'electron' : 'browser',
         purpose: 'ssh',
       }),
     };
@@ -56,14 +56,14 @@ Module.prototype.require = function patchedRequire(id) {
       resolveIdentity: async (args) => ({
         userId: args.userId,
         hostId: args.hostId,
-        runtime: 'browser',
+        runtime: args.runtime,
         purpose: 'ssh',
         authType: 'password',
         host: { id: args.hostId, host: '127.0.0.1', port: mockSshPort, username: 'testuser' },
         ephemeralCredential: createEphemeralCredential({
           sessionId: args.sessionId,
           userId: args.userId,
-          runtime: 'browser',
+          runtime: args.runtime,
           purpose: 'ssh',
           authType: 'password',
           material: { password: 'testpass' },
@@ -229,6 +229,25 @@ async function main() {
       ws2.send(JSON.stringify({ type: 'disconnect' }));
       await sleep(150);
       check('stale: explicit disconnect tears the session down', !getSession(sessionId));
+    }
+
+    // 1c. the desktop runtime may use the relay as a fallback: the runtime it
+    // states in the query is what the token is consumed with and what the session
+    // records. Without it the relay keeps serving the browser runtime.
+    {
+      const sessionId = 'runtime-electron';
+      const ws1 = track(new WebSocket(`${connectUrl(sessionId)}&runtime=electron`));
+      await waitFor(ws1, (m) => m.type === 'connected');
+      check('runtime=electron is carried into the relay session', getSession(sessionId)?.runtime === 'electron');
+      ws1.send(JSON.stringify({ type: 'disconnect' }));
+      await sleep(150);
+
+      const defaultId = 'runtime-default';
+      const ws2 = track(new WebSocket(connectUrl(defaultId)));
+      await waitFor(ws2, (m) => m.type === 'connected');
+      check('runtime defaults to browser on the relay', getSession(defaultId)?.runtime === 'browser');
+      ws2.send(JSON.stringify({ type: 'disconnect' }));
+      await sleep(150);
     }
 
     // 2. resume token is one-time

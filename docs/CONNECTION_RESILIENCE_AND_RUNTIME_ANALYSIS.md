@@ -390,3 +390,44 @@ the target is unreachable directly (needs the cookie/origin mismatch fixed);
 (3) a launcher that activates the OS's existing WireGuard tunnel; (4) embedded
 WireGuard only as a chapter on limits, not as a feature. The thesis framing is
 "VPN awareness + bastion" versus "VPN embedding".
+
+## Addendum (2026-11-01): the desktop runtime against the hosted deployment (tier 2)
+
+Why the Electron build never worked against `ata.uinjakarta.id`: three halves of
+the app disagreed about the backend, and the browser platform blocked the rest.
+
+- The renderer hard-coded a retired hostname for `file://` builds, while the main
+  process consumed connect tokens and verified sessions on `127.0.0.1:8790`.
+- A `file://` page fetching an `https://` API is a cross-site request. The API has
+  no CORS, and its `SameSite=Lax` session cookie is withheld on cross-site requests
+  and WebSocket handshakes. So the desktop renderer could not even log in.
+- The relay consumed every token with `runtime: 'browser'`, so a token issued to
+  the Electron runtime was refused on the relay by the scope check.
+
+What changed (nothing on the server was loosened):
+
+- `electron/appConfig.js`: one API origin for the desktop runtime
+  (`ATA_API_ORIGIN` → local API in development → `https://ata.uinjakarta.id`),
+  published to the renderer synchronously from preload as `window.__ATA_CONFIG__`.
+  `sshHandler.js` reads cookies, verifies the session and consumes tokens against it.
+- `electron/apiProxy.js`: the renderer's `request()` goes over IPC (`api-request`)
+  and the main process fetches with the Electron session's cookie jar
+  (`session.defaultSession.fetch`). Path is restricted to same-origin `/api/...`;
+  only `Content-Type`/`Accept` are forwarded. The relay WebSocket is still opened by
+  the renderer (same code as the browser), and the main process injects the session
+  cookie into that one handshake via `webRequest.onBeforeSendHeaders`.
+- Relay (`server/sshWebSocket.js`): `runtime=electron` in the query is consumed
+  with that runtime, so the scope check still binds the token to the runtime it was
+  issued for. The session record keeps `runtime: 'electron'`, which is how an
+  "Electron via relay" session is distinguishable from a browser one in metrics.
+- Transport selection (`src/lib/networkAwareness.ts`, `App.tsx`, `TerminalView`):
+  on connect and reconnect the desktop runs the tier‑1 check first, then uses
+  `direct` (ssh2 in the main process) when the target answers, or `relay`
+  otherwise. The browser has only `relay`. Detach/resume applies to relay sessions
+  only; direct sessions live in the main process and keep the reconnect policy.
+
+Remaining gap, deliberately left: login still needs a Turnstile token, and the
+widget is bound to the site's hostname, so it may not render inside a `file://`
+page. Either register a desktop-specific widget/hostname or give the desktop
+runtime its own first-party auth path (device token). That is an admin decision,
+not a client change.

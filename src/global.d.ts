@@ -17,6 +17,8 @@ declare global {
 
   interface Window {
     turnstile?: Turnstile;
+    /** Set by the Electron preload: the API origin the main process resolved. */
+    __ATA_CONFIG__?: { apiOrigin: string; wsOrigin: string; hostedMode: boolean };
     ipcRenderer: {
       send: (channel: string, data: unknown) => void;
       invoke: <T = unknown>(channel: string, data: unknown) => Promise<T>;

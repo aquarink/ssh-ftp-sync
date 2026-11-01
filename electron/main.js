@@ -1,7 +1,11 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
+const { getAppConfig } = require('./appConfig');
+const { installRelayCookieInjector, registerApiProxyIpc, registerAppConfigIpc } = require('./apiProxy');
 
 let sshLifecycle = null;
+// One API origin for the whole desktop runtime (hosted by default; see appConfig.js).
+const appConfig = getAppConfig();
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -30,10 +34,21 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  createWindow();
+  // The renderer learns the API origin synchronously from preload, routes its API
+  // calls through the main process (the file:// page cannot fetch the hosted API
+  // directly: no CORS, SameSite cookie withheld), and the relay WebSocket it opens
+  // gets the session cookie injected for that same origin.
+  registerAppConfigIpc(ipcMain, appConfig);
+  registerApiProxyIpc(ipcMain, {
+    apiOrigin: appConfig.apiOrigin,
+    fetchImpl: (url, init) => session.defaultSession.fetch(url, init),
+  });
+  installRelayCookieInjector(session.defaultSession, appConfig);
 
-  // Initialize SSH handler
+  // Register the SSH IPC channels before the window loads so none are missed.
   sshLifecycle = require('./sshHandler');
+
+  createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

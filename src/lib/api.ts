@@ -99,16 +99,93 @@ export interface SshIdentityPayload {
 }
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
+/** Hosted deployment the desktop runtime targets when nothing else is configured. */
+export const DEFAULT_HOSTED_ORIGIN = 'https://ata.uinjakarta.id';
+
+/**
+ * Origin of the API. In the browser it is the page's own origin (empty prefix).
+ * In Electron the main process is the source of truth (`window.__ATA_CONFIG__`,
+ * published by preload); a `file://` page without it falls back to the hosted
+ * deployment.
+ */
+export function getApiOrigin(): string {
+  if (configuredBaseUrl) return configuredBaseUrl;
+  const desktop = window.__ATA_CONFIG__?.apiOrigin;
+  if (desktop) return desktop.replace(/\/$/, '');
+  if (window.location.protocol === 'file:') return DEFAULT_HOSTED_ORIGIN;
+  return '';
+}
+
+/** `ws(s)://` origin of the relay, derived from the API origin. */
+export function getWebSocketOrigin(): string {
+  const origin = getApiOrigin() || window.location.origin;
+  return origin.replace(/^http(s?):/, 'ws$1:');
+}
 
 function getApiUrl(path: string) {
-  if (configuredBaseUrl) return `${configuredBaseUrl}${path}`;
-  if (window.location.protocol === 'file:') {
-    return `https://ant-tech-async.mobwn.my.id${path}`;
+  return `${getApiOrigin()}${path}`;
+}
+
+/** What the Electron main process returns for a proxied API call. */
+interface ProxiedResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  contentType: string;
+  payload: Record<string, unknown>;
+  text: string;
+  server: string | null;
+}
+
+function throwForResponse(res: ProxiedResponse): never {
+  if (!res.contentType.includes('application/json')) {
+    const isNginx = res.server?.toLowerCase().includes('nginx');
+    const source = isNginx
+      ? res.status === 403
+        ? ' from nginx/ModSecurity'
+        : ' from nginx upstream proxy'
+      : '';
+    const excerpt = res.text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`Request failed with status ${res.status} ${res.statusText}${source}${excerpt ? `: ${excerpt}` : ''}`);
   }
-  return path;
+  const payload = res.payload as { details?: unknown; error?: { message?: string } | string; message?: string };
+  const detail = payload.details ? ` (${String(payload.details)})` : '';
+  const error = payload.error;
+  const message = (typeof error === 'object' && error?.message)
+    || (typeof error === 'string' ? error : null)
+    || payload.message
+    || `Request failed with status ${res.status}`;
+  throw new Error(`${message}${detail}`);
+}
+
+function headersToRecord(headers?: HeadersInit): Record<string, string> {
+  if (!headers) return {};
+  if (headers instanceof Headers) {
+    const out: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(headers)) return Object.fromEntries(headers);
+  return { ...headers };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Electron: the renderer runs from file://, so a direct fetch to the hosted API
+  // would be cross-site (no CORS on the API, SameSite cookie withheld). Route it
+  // through the main process, which fetches with the Electron session's cookie jar.
+  if (window.ipcRenderer) {
+    const res = await window.ipcRenderer.invoke<ProxiedResponse>('api-request', {
+      path,
+      method: init?.method || 'GET',
+      headers: headersToRecord(init?.headers),
+      body: typeof init?.body === 'string' ? init.body : undefined,
+    });
+    if (!res.ok) throwForResponse(res);
+    return res.payload as T;
+  }
+
   const response = await fetch(getApiUrl(path), {
     credentials: 'include',
     headers: {
@@ -123,21 +200,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ? await response.json().catch(() => ({}))
     : {};
   if (!response.ok) {
-    if (!contentType.includes('application/json')) {
-      const text = await response.text().catch(() => '');
-      const server = response.headers.get('server');
-      const isNginx = server?.toLowerCase().includes('nginx');
-      const source = isNginx
-        ? response.status === 403
-          ? ' from nginx/ModSecurity'
-          : ' from nginx upstream proxy'
-        : '';
-      const excerpt = text.replace(/\s+/g, ' ').trim().slice(0, 160);
-      throw new Error(`Request failed with status ${response.status} ${response.statusText}${source}${excerpt ? `: ${excerpt}` : ''}`);
-    }
-    const detail = payload.details ? ` (${payload.details})` : '';
-    const message = payload.error?.message || payload.error || payload.message || `Request failed with status ${response.status}`;
-    throw new Error(`${message}${detail}`);
+    const text = contentType.includes('application/json') ? '' : await response.text().catch(() => '');
+    throwForResponse({
+      ok: false,
+      status: response.status,
+      statusText: response.statusText,
+      contentType,
+      payload,
+      text,
+      server: response.headers.get('server'),
+    });
   }
 
   return payload as T;
