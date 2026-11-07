@@ -836,3 +836,10 @@ Limitations:
 - Options rejected and why: a second Turnstile widget (no `file://` origin), loading the hosted site in the window (remote content with `nodeIntegration`), skipping Turnstile for `runtime=electron` (spoofable).
 - Rollout: migration 010 + `server/deviceAuth.js` + routes → SPA `/device` + Devices panel → `electron/deviceLogin.js` + login panel → deploy (migrate required).
 - **Server stage done (2026-11-02):** `db/migrations/010_device_authorizations.sql`; `server/deviceAuth.js` (flow logic, injectable store/clock) + `server/deviceAuthStore.js` (MySQL + memory stores); routes in `server/index.js`; `createSession(userId, { client, deviceLabel, days })`, `sessions.last_seen_at` touched at most once a minute; `GET/DELETE /api/auth/sessions`. Metrics `deviceAuthStarted/Approved/Rejected`. Tests: `server/__tests__/deviceAuth.test.js` (24). SPA and Electron stages not started.
+
+### Temuan verifikasi device login server (2026-11-07)
+- Git bersih di `1c02b7c`; file `server/deviceAuth*.js` di disk identik dengan HEAD. Jest server 158/158, `npm run lint` bersih. Tidak ada error yang tertinggal di working tree.
+- Tab terminal kosong dan tidak ada API lokal di `:8790`, jadi error yang sempat dialami tidak bisa direproduksi dari sini. Belum ada uji end-to-end alur device terhadap MySQL.
+- Gap tes: route device di `server/index.js` belum punya tes HTTP. Yang teruji hanya logika `createDeviceAuth` dengan store memori (24 tes).
+- Risiko sintaks: migrasi memakai `ADD COLUMN IF NOT EXISTS` (001 s.d. 010). Sintaks ini didukung MariaDB, tidak didukung MySQL 8. Pastikan server produksi (VM 105) memang MariaDB sebelum `npm run migrate`.
+- Deploy: VM 105 belum menjalankan `5c3b9c6`, `581656f`, maupun `1c02b7c`. Ketiganya butuh restart API. `1c02b7c` juga butuh migrasi 010 sebelum restart.
