@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw, WifiOff, Monitor } from 'lucide-react';
 import { assessConnectivity, adviceFor, chooseTransport, describeTarget, describeTransport, describeVpn, type ConnectivityAssessment, type SshTransport } from './lib/networkAwareness';
 import { KeychainPanel } from './components/KeychainPanel';
+import { DesktopSignIn } from './components/DesktopSignIn';
 import { DevicePage, postLoginPath } from './components/DevicePage';
 import { DevicesPanel } from './components/DevicesPanel';
 import { LandingPage } from './components/LandingPage';
@@ -141,6 +142,9 @@ function App() {
   const [authError, setAuthError] = useState('');
   const [authNotice, setAuthNotice] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
+  // Desktop builds sign in through the browser; this reveals the password form on request.
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const isDesktopRuntime = Boolean(window.ipcRenderer);
   const [loadingHosts, setLoadingHosts] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isUsersOpen, setIsUsersOpen] = useState(false);
@@ -496,6 +500,13 @@ function App() {
     }
   };
 
+  const finishDesktopSignIn = async () => {
+    const { user } = await api.getSession();
+    if (!user) throw new Error('Sign-in was approved, but no session was set. Try again.');
+    setSession({ user });
+    navigate('/app');
+  };
+
   const handleLogout = async () => {
     if (window.ipcRenderer) {
       await window.ipcRenderer.invoke('session-cleanup-user', { userId: session?.user.id, reason: 'logout' }).catch((err) => {
@@ -837,6 +848,17 @@ function App() {
             </div>
           )}
 
+          {isDesktopRuntime && authMode === 'login' && !showPasswordForm ? (
+            <>
+              <DesktopSignIn onSignedIn={finishDesktopSignIn} />
+              <div className="mt-6 text-center text-xs">
+                <button onClick={() => setShowPasswordForm(true)} className="text-textMuted hover:text-textMain cursor-pointer">
+                  Use email and password instead
+                </button>
+              </div>
+            </>
+          ) : (
+          <>
           <form onSubmit={handleAuthSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-textMuted mb-1.5">
@@ -956,6 +978,8 @@ function App() {
               {authMode === 'login' ? 'Sign Up' : 'Sign In'}
             </button>
           </div>
+          </>
+          )}
         </div>
 
         <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-textMuted flex items-center justify-center gap-4 z-10">

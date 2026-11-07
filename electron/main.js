@@ -1,7 +1,9 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
+const os = require('os');
 const path = require('path');
 const { getAppConfig } = require('./appConfig');
 const { installRelayCookieInjector, registerApiProxyIpc, registerAppConfigIpc } = require('./apiProxy');
+const { registerDeviceLoginIpc } = require('./deviceLogin');
 
 let sshLifecycle = null;
 // One API origin for the whole desktop runtime (hosted by default; see appConfig.js).
@@ -44,6 +46,15 @@ app.whenReady().then(() => {
     fetchImpl: (url, init) => session.defaultSession.fetch(url, init),
   });
   installRelayCookieInjector(session.defaultSession, appConfig);
+
+  // Sign-in through the browser: the poll's Set-Cookie lands in the same jar.
+  registerDeviceLoginIpc(ipcMain, {
+    apiOrigin: appConfig.apiOrigin,
+    fetchImpl: (url, init) => session.defaultSession.fetch(url, init),
+    openExternal: (url) => shell.openExternal(url),
+    deviceLabel: `${os.hostname()} (${process.platform})`,
+    appVersion: app.getVersion(),
+  });
 
   // Register the SSH IPC channels before the window loads so none are missed.
   sshLifecycle = require('./sshHandler');
