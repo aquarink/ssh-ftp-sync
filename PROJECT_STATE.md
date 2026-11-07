@@ -847,3 +847,10 @@ Limitations:
 - Temuan SPA: `react-hooks` lint rule is not configured in this repo, so `eslint-disable` for it fails lint; the `/device` page was type-checked and built but not viewed in a browser (no local API or MySQL here).
 - Temuan lama yang masih terbuka: `electron/identityResolver.test.js` gagal lokal karena binary Electron belum terpasang. Gagal juga di HEAD bersih, bukan akibat perubahan ini.
 - Belum dikerjakan: panel login Electron (`electron/deviceLogin.js`).
+
+### Temuan: regresi reconnect loop (2026-11-08)
+- Gejala di browser: status "reconnecting" berulang, dengan pesan `Connection lost: Resume token scope is required` (`client_error`, retryable). Shell SSH sebenarnya sudah tersambung.
+- Akar: `getAuthorizedConnection` (server/sshWebSocket.js) tidak menyertakan `userId`, padahal `resolveIdentity` memang tidak mengembalikannya. `ctrl.userId` jadi `undefined`, dan `issueResumeToken` melempar error saat shell siap. Bug ini diperkenalkan `2f078c0` (detach/resume), jadi ikut ke rilis `581656f` dan deploy setelahnya.
+- Kenapa lolos: mock `resolveIdentity` di `scripts/integration/relay-resume-test.js` menambahkan `userId`, yang tidak dilakukan resolver asli. Mock sudah disamakan dengan bentuk asli, dan tes sekarang timeout tanpa fix.
+- Perbaikan: `f53c429` di origin (`return { ...resolved, host, user, userId: user.id }`). Di VM 105 ada perbaikan setara, tapi sebagai commit lokal `4d75f9e` yang belum dipush. Sebelum sinkronisasi, verifikasi bahwa isi commit VM sama dengan `f53c429`.
+- Pelajaran riset: tes integrasi yang memalsukan dependensi harus memakai bentuk nilai sungguhan, dan tiap refactor kontrak antar-modul perlu satu tes yang memakai modul asli.
