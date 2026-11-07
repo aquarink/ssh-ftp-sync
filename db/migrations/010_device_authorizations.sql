@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS device_authorizations (
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
 
+-- Plain ADD COLUMN: MySQL 8 has no IF NOT EXISTS for it. migrate.js records each
+-- file once, so the statement never runs twice.
 ALTER TABLE sessions
-  ADD COLUMN IF NOT EXISTS client       VARCHAR(16)  NOT NULL DEFAULT 'web' AFTER user_id,
-  ADD COLUMN IF NOT EXISTS device_label VARCHAR(120) NULL AFTER client,
-  ADD COLUMN IF NOT EXISTS last_seen_at DATETIME(3)  NULL AFTER expires_at;
+  ADD COLUMN client       VARCHAR(16)  NOT NULL DEFAULT 'web' AFTER user_id,
+  ADD COLUMN device_label VARCHAR(120) NULL AFTER client,
+  ADD COLUMN last_seen_at DATETIME(3)  NULL AFTER expires_at;

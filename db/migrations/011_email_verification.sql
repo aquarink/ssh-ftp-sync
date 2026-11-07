@@ -1,5 +1,6 @@
+-- Plain ADD COLUMN: MySQL 8 has no IF NOT EXISTS for it (migrate.js runs each file once).
 ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS email_verified_at DATETIME(3) NULL AFTER email_checked_at;
+  ADD COLUMN email_verified_at DATETIME(3) NULL AFTER email_checked_at;
 
 -- Accounts that already exist were created before email verification. Mark them
 -- verified so no current user is locked out by this release.

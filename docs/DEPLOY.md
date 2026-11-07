@@ -123,7 +123,10 @@ this release; the API fails on `/api/auth/device/*` and on every login until it 
 `npm run migrate` applies `011_email_verification.sql`. Existing accounts are
 backfilled as verified, so nobody is locked out. New registrations must click a
 link before they can sign in, so **mail has to be configured before opening
-registration**. Set these in the VM's `.env` (never commit them):
+registration**. Copy the **Email** block from `.env.example` into the VM's `.env` and fill the
+values there (never commit real values). Do not wrap values in quotes: they are
+read as-is. Check the server's MySQL version first with `SELECT VERSION();`.
+Migrations 010 and 011 use plain `ADD COLUMN`, which works on MySQL 8 and MariaDB.
 
 | Variable | Purpose |
 |---|---|
