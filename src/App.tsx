@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw, WifiOff } from 'lucide-react';
+import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Check, ShieldCheck, KeyRound, Pin, PinOff, Pencil, Copy, ChevronLeft, ChevronRight, Folder, ZoomIn, ZoomOut, RotateCcw, WifiOff, Monitor } from 'lucide-react';
 import { assessConnectivity, adviceFor, chooseTransport, describeTarget, describeTransport, describeVpn, type ConnectivityAssessment, type SshTransport } from './lib/networkAwareness';
 import { KeychainPanel } from './components/KeychainPanel';
+import { DevicePage, postLoginPath } from './components/DevicePage';
+import { DevicesPanel } from './components/DevicesPanel';
 import { LandingPage } from './components/LandingPage';
 import { SftpFileManager } from './components/SftpFileManager';
 import { TerminalView } from './components/TerminalView';
@@ -172,7 +174,7 @@ function App() {
 
     if (options?.replace) window.history.replaceState({}, '', path);
     else window.history.pushState({}, '', path);
-    setRoute(path);
+    setRoute(window.location.pathname);
   };
 
   const isTabletViewport = viewportWidth >= 768 && viewportWidth < 1280;
@@ -312,7 +314,7 @@ function App() {
       window.history.replaceState({}, '', '/app');
       setRoute('/app');
     }
-    if (!session && route !== '/' && route !== '/login' && route !== '/register' && route !== '/terms' && route !== '/privacy') {
+    if (!session && route !== '/' && route !== '/login' && route !== '/register' && route !== '/terms' && route !== '/privacy' && route !== '/device') {
       window.history.replaceState({}, '', '/');
       setRoute('/');
     }
@@ -464,7 +466,7 @@ function App() {
       if (authMode === 'login') {
         const { user } = await api.login(emailLower, authPassword, turnstileToken);
         setSession({ user });
-        navigate('/app');
+        navigate(postLoginPath(window.location.search));
 
         // Reset form
         setAuthEmail('');
@@ -797,6 +799,9 @@ function App() {
   if (route === '/privacy') {
     return <PrivacyPage onNavigate={navigate} session={session} />;
   }
+  if (route === '/device') {
+    return <DevicePage session={session} onNavigate={navigate} />;
+  }
 
   if (!session) {
     if (route === '/') {
@@ -973,6 +978,9 @@ function App() {
         </button>
         <button onClick={() => navigate('/app/keychain')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app/keychain' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="SSH Keys">
           <KeyRound size={24} />
+        </button>
+        <button onClick={() => navigate('/app/devices')} className={`p-2 rounded-xl cursor-pointer transition ${route === '/app/devices' ? 'bg-primary/10 text-primary' : 'text-textMuted hover:text-textMain'}`} title="Devices and sessions">
+          <Monitor size={24} />
         </button>
         {session.user.role === 'admin' && (
           <button
@@ -1202,7 +1210,9 @@ function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col bg-background relative h-full min-w-0">
-        {route === '/app/keychain' ? (
+        {route === '/app/devices' ? (
+          <DevicesPanel />
+        ) : route === '/app/keychain' ? (
           <KeychainPanel
             userId={session?.user.id}
             onHostUpdated={(host) => setHosts(current => current.map(item => item.id === host.id ? host : item))}

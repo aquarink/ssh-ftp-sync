@@ -843,3 +843,7 @@ Limitations:
 - Gap tes: route device di `server/index.js` belum punya tes HTTP. Yang teruji hanya logika `createDeviceAuth` dengan store memori (24 tes).
 - Risiko sintaks: migrasi memakai `ADD COLUMN IF NOT EXISTS` (001 s.d. 010). Sintaks ini didukung MariaDB, tidak didukung MySQL 8. Pastikan server produksi (VM 105) memang MariaDB sebelum `npm run migrate`.
 - Deploy: VM 105 belum menjalankan `5c3b9c6`, `581656f`, maupun `1c02b7c`. Ketiganya butuh restart API. `1c02b7c` juga butuh migrasi 010 sebelum restart.
+- **SPA stage done (2026-11-07):** `src/components/DevicePage.tsx` (route `/device`; reads `?code=`, shows device label, version, IP and time, Approve/Deny; signed-out visitors get a sign-in link with `next=`), `src/components/DevicesPanel.tsx` (sidebar route `/app/devices`, list of web and desktop sessions, revoke for others), `src/lib/api.ts` methods. `postLoginPath` accepts only `/device?code=…` as `next`, so login cannot redirect elsewhere. `navigate()` now sets the route from `pathname` only; before this, a `?code=` query would have broken the `/device` match.
+- Temuan SPA: `react-hooks` lint rule is not configured in this repo, so `eslint-disable` for it fails lint; the `/device` page was type-checked and built but not viewed in a browser (no local API or MySQL here).
+- Temuan lama yang masih terbuka: `electron/identityResolver.test.js` gagal lokal karena binary Electron belum terpasang. Gagal juga di HEAD bersih, bukan akibat perubahan ini.
+- Belum dikerjakan: panel login Electron (`electron/deviceLogin.js`).

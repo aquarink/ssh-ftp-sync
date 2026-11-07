@@ -10,6 +10,27 @@ export interface Session {
   user: User;
 }
 
+export interface DeviceAuthorization {
+  userCode: string;
+  deviceLabel: string | null;
+  appVersion: string | null;
+  runtime: string;
+  requesterIp: string | null;
+  requestedAt: string;
+  expiresAt: string;
+  expiresIn: number;
+}
+
+export interface ClientSession {
+  id: string;
+  client: 'web' | 'desktop';
+  deviceLabel: string | null;
+  createdAt: string;
+  lastSeenAt: string | null;
+  expiresAt: string;
+  current: boolean;
+}
+
 export interface Host {
   id: string;
   userId?: string;
@@ -236,6 +257,21 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  getDeviceAuthorization: (code: string) =>
+    request<DeviceAuthorization>(`/api/auth/device?code=${encodeURIComponent(code)}`),
+  approveDevice: (userCode: string) =>
+    request<{ ok: true; deviceLabel: string | null }>('/api/auth/device/approve', {
+      method: 'POST',
+      body: JSON.stringify({ userCode }),
+    }),
+  denyDevice: (userCode: string) =>
+    request<{ ok: true }>('/api/auth/device/deny', {
+      method: 'POST',
+      body: JSON.stringify({ userCode }),
+    }),
+  listSessions: () => request<{ sessions: ClientSession[] }>('/api/auth/sessions'),
+  revokeSession: (id: string) =>
+    request<{ ok: true }>(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   listHosts: () => request<{ hosts: Host[] }>('/api/hosts'),
   createHost: (host: Omit<Host, 'id'>) =>
     request<{ host: Host }>('/api/hosts', {
