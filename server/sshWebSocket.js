@@ -91,7 +91,9 @@ async function getAuthorizedConnection(req, url) {
     purpose: authorization.purpose,
     sessionId: url.searchParams.get('sessionId') || null,
   });
-  return { ...resolved, host: authorization.host, user };
+  // The owner of the shell is the authenticated user. The resolver does not return
+  // a userId, and resume tokens are scoped to it, so it must be set here.
+  return { ...resolved, host: authorization.host, user, userId: user.id };
 }
 
 function readMessage(raw) {

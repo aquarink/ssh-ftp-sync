@@ -53,8 +53,9 @@ Module.prototype.require = function patchedRequire(id) {
   }
   if (basename(id) === 'identityResolver') {
     return {
+      // Same shape as the real resolver: it does not return a userId. The relay
+      // must take the owner from the authenticated user, not from the resolver.
       resolveIdentity: async (args) => ({
-        userId: args.userId,
         hostId: args.hostId,
         runtime: args.runtime,
         purpose: 'ssh',
