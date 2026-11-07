@@ -858,3 +858,10 @@ Limitations:
 - **Electron stage done (2026-11-08):** `electron/deviceLogin.js` (controller: start, poll with server interval and slow_down, expiry on the client clock, cancel, superseded starts, trusted-origin check before opening the browser; IPC `device-login-start|cancel|reopen`, status event `device-login-status`), registered in `electron/main.js` with `session.defaultSession.fetch`. Renderer: `src/lib/deviceLogin.ts`, `src/components/DesktopSignIn.tsx`. In the desktop build the login card shows the code and waits for approval; "Use email and password instead" keeps the old form. Tests: `electron/deviceLogin.test.js` (18).
 - Not verified: no Electron binary here, so the cookie written by the poll's `Set-Cookie` into `session.defaultSession` is still an assumption. First desktop run on a real build must confirm it. Also needs `npm run migrate` and a restart on VM 105 before `/api/auth/device/*` exists in production.
 - Earlier regression fix: `f53c429` (userId for the shell owner), see the reconnect-loop finding above.
+
+### Signup email verification, stage 1 (2026-11-08)
+- Design: `docs/EMAIL_NOTIFICATIONS_DESIGN.md`. Migration 011 (`users.email_verified_at`, `email_verification_tokens`, existing users backfilled).
+- `server/mailer.js`: primary cPanel SMTP, fallback on 4xx or connection errors only. `server/signupVerification.js`: 24 h single-use hashed tokens, resend answers generically, 3 per email and 10 per IP per hour.
+- Routes: register sends the link (`verificationSent` in the response), `POST /api/auth/verify-email`, `POST /api/auth/resend-verification` (Turnstile), login refuses unverified accounts. SPA: `/verify` page and a resend button on the login card.
+- Tests: 16 new (mailer and verification). Jest 227 passed, only the known Electron-binary suite fails.
+- Not done: outbox table and daily counters, login alerts (stage 2), SSH digest (stage 3). Real sending is not tested; no mail was sent. Needs `npm run migrate` on VM 105 before the release.

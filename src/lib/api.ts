@@ -272,6 +272,16 @@ export const api = {
   listSessions: () => request<{ sessions: ClientSession[] }>('/api/auth/sessions'),
   revokeSession: (id: string) =>
     request<{ ok: true }>(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  verifyEmail: (token: string) =>
+    request<{ ok: true; message: string }>('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  resendVerification: (email: string, turnstileToken: string) =>
+    request<{ ok: true; message: string }>('/api/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email, turnstileToken }),
+    }),
   listHosts: () => request<{ hosts: Host[] }>('/api/hosts'),
   createHost: (host: Omit<Host, 'id'>) =>
     request<{ host: Host }>('/api/hosts', {

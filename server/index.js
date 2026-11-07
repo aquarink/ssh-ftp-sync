@@ -15,7 +15,9 @@ const {
 const { verifySignupEmail } = require('./emailVerification');
 const { validateRegisterLegalConsent } = require('./legalPolicy');
 const { validateTurnstile } = require('./turnstile');
-const { createDeviceAuth } = require('./deviceAuth');
+const { clientIp, createDeviceAuth, publicOrigin } = require('./deviceAuth');
+const { mailerFromEnv } = require('./mailer');
+const { createMysqlVerificationStore, createSignupVerification } = require('./signupVerification');
 const { createMysqlDeviceAuthStore } = require('./deviceAuthStore');
 const { attachSshWebSocket } = require('./sshWebSocket');
 const { runSftpOperation } = require('./sftpService');
@@ -49,6 +51,11 @@ const port = Number(process.env.API_PORT || 8790);
 // Desktop sign-in without a Turnstile widget: device authorization flow
 // (docs/DESKTOP_DEVICE_LOGIN_DESIGN.md). Stale rows are swept every minute.
 const deviceAuth = createDeviceAuth({ store: createMysqlDeviceAuthStore(pool), createSession });
+// Signup verification mail: primary SMTP account, fallback on transient failure (see mailer.js).
+const signupVerification = createSignupVerification({
+  store: createMysqlVerificationStore(pool),
+  mailer: mailerFromEnv(),
+});
 setInterval(() => deviceAuth.sweep().catch(() => {}), 60_000).unref?.();
 const maxBodyBytes = 1024 * 1024 * 1024;
 
@@ -217,9 +224,20 @@ async function register(req, res) {
     throw error;
   }
 
+  let verificationSent = true;
+  try {
+    await signupVerification.issueAndSend(user, publicOrigin(req));
+  } catch (error) {
+    verificationSent = false;
+    console.error('signup-verification-mail-failed', redactSecretFields({ status: error.status || null, code: error.code || null, message: error.message }));
+  }
+
   json(res, 201, {
     ok: true,
-    message: 'Registration received. Wait for administrator approval before signing in.',
+    verificationSent,
+    message: verificationSent
+      ? 'Registration received. Check your email to verify the address. An administrator approves the account after that.'
+      : 'Registration received, but the verification email could not be sent. Request a new link from the sign-in page in a few minutes.',
   });
 }
 
@@ -228,7 +246,7 @@ async function login(req, res) {
   await validateTurnstile(req, body.turnstileToken);
   const identifier = normalizeEmail(body.identifier || body.email);
   const [rows] = await pool.execute(
-    `SELECT id, email, username, password_hash, role, approval_status
+    `SELECT id, email, username, password_hash, role, approval_status, email_verified_at
        FROM users
       WHERE email = ? OR username = ?
       LIMIT 1`,
@@ -237,6 +255,9 @@ async function login(req, res) {
   const user = rows[0];
   if (!user || !(await verifyPassword(body.password || '', user.password_hash))) {
     throw Object.assign(new Error('Incorrect email or password'), { status: 401 });
+  }
+  if (!user.email_verified_at) {
+    throw Object.assign(new Error('Verify your email address first. Check your inbox for the link.'), { status: 403 });
   }
   if (user.approval_status === 'rejected') {
     throw Object.assign(new Error('This account was rejected by an administrator'), { status: 403 });
@@ -247,6 +268,26 @@ async function login(req, res) {
 
   const token = await createSession(user.id);
   json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookieHeader(token, req) });
+}
+
+async function verifyEmail(req, res) {
+  const body = await readJson(req);
+  await signupVerification.consume(body.token);
+  json(res, 200, {
+    ok: true,
+    message: 'Email verified. An administrator reviews the account before you can sign in.',
+  });
+}
+
+async function resendVerification(req, res) {
+  const body = await readJson(req);
+  await validateTurnstile(req, body.turnstileToken);
+  const result = await signupVerification.resend({
+    email: normalizeEmail(body.email),
+    ip: clientIp(req),
+    originForLink: publicOrigin(req),
+  });
+  json(res, 200, result);
 }
 
 async function changePassword(req, res) {
@@ -929,6 +970,8 @@ async function route(req, res) {
     return json(res, 200, { ok: true }, { 'Set-Cookie': expiredSessionCookieHeader(req) });
   }
   if (req.method === 'PUT' && url.pathname === '/api/auth/password') return changePassword(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/auth/verify-email') return verifyEmail(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/auth/resend-verification') return resendVerification(req, res);
   if (req.method === 'POST' && url.pathname === '/api/auth/device/start') {
     return json(res, 201, await deviceAuth.start(req, await readJson(req)));
   }

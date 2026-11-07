@@ -3,6 +3,7 @@ import { Terminal, Settings, Plus, Server, X, Play, Loader2, LogOut, Trash2, Che
 import { assessConnectivity, adviceFor, chooseTransport, describeTarget, describeTransport, describeVpn, type ConnectivityAssessment, type SshTransport } from './lib/networkAwareness';
 import { KeychainPanel } from './components/KeychainPanel';
 import { DesktopSignIn } from './components/DesktopSignIn';
+import { VerifyEmailPage } from './components/VerifyEmailPage';
 import { DevicePage, postLoginPath } from './components/DevicePage';
 import { DevicesPanel } from './components/DevicesPanel';
 import { LandingPage } from './components/LandingPage';
@@ -318,7 +319,7 @@ function App() {
       window.history.replaceState({}, '', '/app');
       setRoute('/app');
     }
-    if (!session && route !== '/' && route !== '/login' && route !== '/register' && route !== '/terms' && route !== '/privacy' && route !== '/device') {
+    if (!session && route !== '/' && route !== '/login' && route !== '/register' && route !== '/terms' && route !== '/privacy' && route !== '/device' && route !== '/verify') {
       window.history.replaceState({}, '', '/');
       setRoute('/');
     }
@@ -492,6 +493,22 @@ function App() {
         setAuthConfirmPassword('');
         setAgreeLegal(false);
       }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      resetTurnstile();
+      setAuthLoading(false);
+    }
+  };
+
+  // The verification mail is re-sent for an account that has not verified yet.
+  const handleResendVerification = async () => {
+    setAuthError('');
+    setAuthNotice('');
+    setAuthLoading(true);
+    try {
+      const { message } = await api.resendVerification(authEmail.trim().toLowerCase(), turnstileToken);
+      setAuthNotice(message);
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -813,6 +830,9 @@ function App() {
   if (route === '/device') {
     return <DevicePage session={session} onNavigate={navigate} />;
   }
+  if (route === '/verify') {
+    return <VerifyEmailPage onNavigate={navigate} />;
+  }
 
   if (!session) {
     if (route === '/') {
@@ -839,6 +859,16 @@ function App() {
           {authError && (
             <div className="mb-4 p-3 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg text-xs leading-relaxed">
               {authError}
+              {authMode === 'login' && authError.includes('Verify your email') && (
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={authLoading || !turnstileToken || !authEmail.trim()}
+                  className="mt-2 block font-semibold underline disabled:opacity-50 cursor-pointer"
+                >
+                  Send a new verification link
+                </button>
+              )}
             </div>
           )}
 

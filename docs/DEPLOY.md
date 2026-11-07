@@ -117,3 +117,20 @@ this release; the API fails on `/api/auth/device/*` and on every login until it 
 (`createSession` now writes `sessions.client`). Routes: `POST /api/auth/device/start`,
 `/poll`, `/approve`, `/deny`, `GET /api/auth/device?code=`, `GET /api/auth/sessions`,
 `DELETE /api/auth/sessions/:id`. Design: `docs/DESKTOP_DEVICE_LOGIN_DESIGN.md`.
+
+## Signup email verification (migration 011)
+
+`npm run migrate` applies `011_email_verification.sql`. Existing accounts are
+backfilled as verified, so nobody is locked out. New registrations must click a
+link before they can sign in, so **mail has to be configured before opening
+registration**. Set these in the VM's `.env` (never commit them):
+
+| Variable | Purpose |
+|---|---|
+| `MAIL_FROM` | sender address, e.g. the university mailbox |
+| `SMTP_PRIMARY_HOST`, `SMTP_PRIMARY_PORT` (465), `SMTP_PRIMARY_USER`, `SMTP_PRIMARY_PASS` | primary account (cPanel mailbox) |
+| `SMTP_FALLBACK_HOST`, `SMTP_FALLBACK_PORT`, `SMTP_FALLBACK_USER`, `SMTP_FALLBACK_PASS` | optional transactional fallback (used only on transient failure) |
+| `APP_PUBLIC_ORIGIN` | origin in the link when the API is not behind the same host |
+
+Without any SMTP setting, registration still succeeds but tells the user the mail
+could not be sent; they can request a link later from the sign-in page.
