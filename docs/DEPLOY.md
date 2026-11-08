@@ -118,6 +118,34 @@ this release; the API fails on `/api/auth/device/*` and on every login until it 
 `/poll`, `/approve`, `/deny`, `GET /api/auth/device?code=`, `GET /api/auth/sessions`,
 `DELETE /api/auth/sessions/:id`. Design: `docs/DESKTOP_DEVICE_LOGIN_DESIGN.md`.
 
+## Checking mail delivery on VM 105
+
+Run these on the VM. Nothing here changes data.
+
+```bash
+# Today's sends per provider, remaining daily cap, and the latest failures
+cd /var/nginx/ssh-ftp-sync && node scripts/mail-status.js 20
+
+# Why the cPanel account was skipped (the fallback log line names the error code)
+sudo journalctl -u ant-tech-async-api --since "2 days ago" | grep -E "mail-fallback-used|signup-verification-mail-failed|login-alert-failed"
+```
+
+How to read the error codes:
+
+- `ETIMEDOUT`, `ECONNREFUSED`, `ESOCKET`, `ECONNECTION`: the VM cannot reach
+  `mail.uinjakarta.id:465`. Ask IT whether the VM may open outgoing 465; 587 is the
+  usual alternative and can be set as `SMTP_PRIMARY_PORT`.
+- `421` or `450`/`451`: the server refused for now (usually a rate limit). The
+  cPanel email limit for the account needs raising, or fewer messages are sent.
+- `535` or `534`: authentication failed. Check `SMTP_PRIMARY_USER` and
+  `SMTP_PRIMARY_PASS`; this is a permanent error, so the fallback is not tried.
+- `550`, `553`, `554`: the server rejected the message or the recipient. Not a
+  connection problem; the fallback is not tried.
+
+The cPanel side (not visible from the VM): **Email > Email Accounts > Track Delivery**
+shows what the mailbox sent and why messages were held, and **Email > Email Deliverability**
+shows SPF, DKIM and DMARC for the domain.
+
 ## Signup email verification (migration 011)
 
 `npm run migrate` applies `011_email_verification.sql`. Existing accounts are
