@@ -282,6 +282,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, turnstileToken }),
     }),
+  getPreferences: () => request<{ loginAlerts: boolean }>('/api/auth/preferences'),
+  setLoginAlerts: (loginAlerts: boolean) =>
+    request<{ loginAlerts: boolean }>('/api/auth/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ loginAlerts }),
+    }),
   listHosts: () => request<{ hosts: Host[] }>('/api/hosts'),
   createHost: (host: Omit<Host, 'id'>) =>
     request<{ host: Host }>('/api/hosts', {

@@ -1,6 +1,6 @@
 # Email: verification and notifications — design
 
-Status: stage 1 (signup verification) in progress. Decided 2026-11-08.
+Status: stage 1 (signup verification) and stage 2 (sign-in alerts) implemented. Stage 3 (SSH digest) not started. Decided 2026-11-08.
 
 ## Goals
 

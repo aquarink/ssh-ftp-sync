@@ -135,5 +135,13 @@ Migrations 010 and 011 use plain `ADD COLUMN`, which works on MySQL 8 and MariaD
 | `SMTP_FALLBACK_HOST`, `SMTP_FALLBACK_PORT`, `SMTP_FALLBACK_USER`, `SMTP_FALLBACK_PASS` | optional transactional fallback (used only on transient failure) |
 | `APP_PUBLIC_ORIGIN` | origin in the link when the API is not behind the same host |
 
+Migration `012_login_alerts.sql` adds the sign-in alert setting, the known-IP
+table and the `email_outbox` table. Every outgoing mail is recorded there and
+stops at `EMAIL_DAILY_CAP` (default 150) per UTC day, so the SMTP2GO quota is not
+used up silently. Check today's sends with
+`SELECT status, COUNT(*) FROM email_outbox WHERE created_at >= UTC_DATE() GROUP BY status;`.
+A `mail-fallback-used` line in the API log means the cPanel account failed that
+send; the line names the error code, which tells us why.
+
 Without any SMTP setting, registration still succeeds but tells the user the mail
 could not be sent; they can request a link later from the sign-in page.

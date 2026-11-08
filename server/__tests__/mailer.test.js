@@ -25,6 +25,19 @@ describe('mailer', () => {
     await expect(mailer.send({ to: 'a@example.test' })).resolves.toEqual({ provider: 'fallback', messageId: 'f1' });
   });
 
+  test('logs which earlier sender failed when the fallback delivers', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const primary = { name: 'primary', send: jest.fn(async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); }) };
+    const fallback = { name: 'fallback', send: jest.fn(async () => ({})) };
+    const mailer = createMailer({ senders: [primary, fallback], from: 'x@y.test' });
+    await mailer.send({ to: 'a@example.test' });
+    expect(warn).toHaveBeenCalledWith('mail-fallback-used', {
+      provider: 'fallback',
+      previous: [{ provider: 'primary', code: 'ETIMEDOUT', responseCode: null }],
+    });
+    warn.mockRestore();
+  });
+
   test('a permanent rejection is not retried on the fallback', async () => {
     const primary = { name: 'primary', send: jest.fn(async () => { throw permanent(); }) };
     const fallback = { name: 'fallback', send: jest.fn(async () => ({})) };

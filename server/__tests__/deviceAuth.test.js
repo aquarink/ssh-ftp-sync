@@ -152,7 +152,7 @@ describe('poll', () => {
     const second = await h.auth.poll(makeReq(), { deviceCode: started.deviceCode });
     expect(second).toMatchObject({ status: 200, body: { status: 'approved' }, sessionToken: 'session-token' });
     expect(second.user).toMatchObject({ id: 'user-1' });
-    expect(h.createSession).toHaveBeenCalledWith('user-1', { client: 'desktop', deviceLabel: 'MacBook (darwin)', days: expect.any(Number) });
+    expect(h.createSession).toHaveBeenCalledWith('user-1', expect.objectContaining({ client: 'desktop', deviceLabel: 'MacBook (darwin)', days: expect.any(Number) }));
 
     h.advance(5000);
     const third = await h.auth.poll(makeReq(), { deviceCode: started.deviceCode });

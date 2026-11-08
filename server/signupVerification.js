@@ -79,7 +79,7 @@ function createSignupVerification({
       expires_at: new Date(at.getTime() + TOKEN_TTL_MS),
     });
     const link = `${originForLink}/verify?token=${token}`;
-    return mailer.send({ to: user.email, ...verificationMessage(link) });
+    return mailer.send({ template: 'signup_verification', to: user.email, ...verificationMessage(link) });
   }
 
   // Single use: the open token is flipped to used only once, so two concurrent

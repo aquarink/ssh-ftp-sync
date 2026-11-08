@@ -865,3 +865,10 @@ Limitations:
 - Routes: register sends the link (`verificationSent` in the response), `POST /api/auth/verify-email`, `POST /api/auth/resend-verification` (Turnstile), login refuses unverified accounts. SPA: `/verify` page and a resend button on the login card.
 - Tests: 16 new (mailer and verification). Jest 227 passed, only the known Electron-binary suite fails.
 - Not done: outbox table and daily counters, login alerts (stage 2), SSH digest (stage 3). Real sending is not tested; no mail was sent. Needs `npm run migrate` on VM 105 before the release.
+
+### Sign-in alerts, stage 2 (2026-11-08)
+- Migration 012: `users.login_alerts_enabled`, `user_known_ips`, `email_outbox`.
+- `server/mailOutbox.js` records every message and caps sends per UTC day (`EMAIL_DAILY_CAP`, default 150). `server/loginAlerts.js`: desktop sign-ins always alert; web sign-ins alert from an IP not seen in 30 days; the first sign-in of an account is recorded silently. Alerts never block a sign-in.
+- `GET/PUT /api/auth/preferences` and a checkbox in the Devices panel.
+- Mailer now logs `mail-fallback-used` with the primary's error code when the fallback delivers. The VM test showed every message going through SMTP2GO, so the cPanel failure needs checking from that log.
+- Tests: server 187 passed. Real delivery of alerts not tested end to end.

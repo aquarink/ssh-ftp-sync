@@ -258,6 +258,8 @@ function createDeviceAuth({ store, createSession, now = () => new Date(), env = 
       client: 'desktop',
       deviceLabel: row.device_label,
       days: config.sessionDays,
+      ip: clientIp(req),
+      origin: publicOrigin(req, env),
     });
     logAccessEvent('deviceAuthConsumed', {
       id: row.id,

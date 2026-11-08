@@ -48,12 +48,18 @@ function createMailer({ senders = [], from }) {
         throw Object.assign(new Error('Email delivery is not configured'), { status: 503 });
       }
       let lastError = null;
+      const failures = [];
       for (const sender of senders) {
         try {
           const info = await sender.send({ from, ...message });
+          // Log why an earlier sender was skipped, without addresses or secrets.
+          if (failures.length > 0) {
+            console.warn('mail-fallback-used', { provider: sender.name, previous: failures });
+          }
           return { provider: sender.name, messageId: info?.messageId || null };
         } catch (error) {
           lastError = error;
+          failures.push({ provider: sender.name, code: error.code || null, responseCode: error.responseCode || null });
           if (!isTransientError(error)) break;
         }
       }

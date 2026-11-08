@@ -17,6 +17,8 @@ const { validateRegisterLegalConsent } = require('./legalPolicy');
 const { validateTurnstile } = require('./turnstile');
 const { clientIp, createDeviceAuth, publicOrigin } = require('./deviceAuth');
 const { mailerFromEnv } = require('./mailer');
+const { createMemoryOutboxStore, createMysqlOutboxStore, createOutboxMailer } = require('./mailOutbox');
+const { createLoginAlerts, createMysqlLoginAlertStore } = require('./loginAlerts');
 const { createMysqlVerificationStore, createSignupVerification } = require('./signupVerification');
 const { createMysqlDeviceAuthStore } = require('./deviceAuthStore');
 const { attachSshWebSocket } = require('./sshWebSocket');
@@ -50,11 +52,27 @@ const port = Number(process.env.API_PORT || 8790);
 
 // Desktop sign-in without a Turnstile widget: device authorization flow
 // (docs/DESKTOP_DEVICE_LOGIN_DESIGN.md). Stale rows are swept every minute.
-const deviceAuth = createDeviceAuth({ store: createMysqlDeviceAuthStore(pool), createSession });
-// Signup verification mail: primary SMTP account, fallback on transient failure (see mailer.js).
+// Every outgoing message is recorded and capped per day (mailOutbox.js).
+const outboxMailer = createOutboxMailer({
+  mailer: mailerFromEnv(),
+  store: createMysqlOutboxStore(pool),
+  dailyCap: Number(process.env.EMAIL_DAILY_CAP) || undefined,
+});
+const loginAlerts = createLoginAlerts({ store: createMysqlLoginAlertStore(pool), mailer: outboxMailer });
+
+// Desktop sign-ins alert too; the poll's IP and origin are passed through.
+const deviceAuth = createDeviceAuth({
+  store: createMysqlDeviceAuthStore(pool),
+  createSession: async (userId, options) => {
+    const token = await createSession(userId, options);
+    loginAlerts.onSignIn({ userId, client: 'desktop', ip: options.ip, deviceLabel: options.deviceLabel, origin: options.origin });
+    return token;
+  },
+});
+// Signup verification mail: recorded and capped like every other message.
 const signupVerification = createSignupVerification({
   store: createMysqlVerificationStore(pool),
-  mailer: mailerFromEnv(),
+  mailer: outboxMailer,
 });
 setInterval(() => deviceAuth.sweep().catch(() => {}), 60_000).unref?.();
 const maxBodyBytes = 1024 * 1024 * 1024;
@@ -267,6 +285,8 @@ async function login(req, res) {
   }
 
   const token = await createSession(user.id);
+  // Not awaited: a slow mail provider must not delay the sign-in.
+  loginAlerts.onSignIn({ userId: user.id, client: 'web', ip: clientIp(req), origin: publicOrigin(req) });
   json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookieHeader(token, req) });
 }
 
@@ -288,6 +308,24 @@ async function resendVerification(req, res) {
     originForLink: publicOrigin(req),
   });
   json(res, 200, result);
+}
+
+async function getPreferences(req, res) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const [rows] = await pool.execute('SELECT login_alerts_enabled FROM users WHERE id = ? LIMIT 1', [user.id]);
+  json(res, 200, { loginAlerts: Boolean(rows[0]?.login_alerts_enabled) });
+}
+
+async function updatePreferences(req, res) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const body = await readJson(req);
+  if (typeof body.loginAlerts !== 'boolean') {
+    throw Object.assign(new Error('loginAlerts must be true or false'), { status: 400 });
+  }
+  await pool.execute('UPDATE users SET login_alerts_enabled = ? WHERE id = ?', [body.loginAlerts ? 1 : 0, user.id]);
+  json(res, 200, { loginAlerts: body.loginAlerts });
 }
 
 async function changePassword(req, res) {
@@ -970,6 +1008,8 @@ async function route(req, res) {
     return json(res, 200, { ok: true }, { 'Set-Cookie': expiredSessionCookieHeader(req) });
   }
   if (req.method === 'PUT' && url.pathname === '/api/auth/password') return changePassword(req, res);
+  if (req.method === 'GET' && url.pathname === '/api/auth/preferences') return getPreferences(req, res);
+  if (req.method === 'PUT' && url.pathname === '/api/auth/preferences') return updatePreferences(req, res);
   if (req.method === 'POST' && url.pathname === '/api/auth/verify-email') return verifyEmail(req, res);
   if (req.method === 'POST' && url.pathname === '/api/auth/resend-verification') return resendVerification(req, res);
   if (req.method === 'POST' && url.pathname === '/api/auth/device/start') {

@@ -12,13 +12,15 @@ export function DevicesPanel() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const [loginAlerts, setLoginAlerts] = useState<boolean | null>(null);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const { sessions: rows } = await api.listSessions();
+      const [{ sessions: rows }, prefs] = await Promise.all([api.listSessions(), api.getPreferences()]);
       setSessions(rows);
+      setLoginAlerts(prefs.loginAlerts);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -29,6 +31,16 @@ export function DevicesPanel() {
   useEffect(() => {
     load();
   }, []);
+
+  const toggleLoginAlerts = async (enabled: boolean) => {
+    setError('');
+    try {
+      const result = await api.setLoginAlerts(enabled);
+      setLoginAlerts(result.loginAlerts);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const revoke = async (session: ClientSession) => {
     const name = session.deviceLabel || 'this browser';
@@ -59,6 +71,20 @@ export function DevicesPanel() {
         </div>
 
         {error && <div className="p-3 bg-red-500/10 text-red-300 border border-red-500/20 rounded text-xs">{error}</div>}
+
+        {loginAlerts !== null && (
+          <label className="flex items-start gap-3 p-4 border border-border bg-surface rounded-lg text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={loginAlerts}
+              onChange={(event) => toggleLoginAlerts(event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-border bg-background text-primary"
+            />
+            <span className="text-textMuted leading-relaxed">
+              Email me when a sign-in comes from a new IP address, and whenever a desktop app signs in.
+            </span>
+          </label>
+        )}
 
         {loading ? (
           <div className="flex items-center gap-2 text-textMuted text-sm"><Loader2 size={16} className="animate-spin" /> Loading</div>
